@@ -54,7 +54,8 @@ Settings live in `Documents\Euro Truck Simulator 2\EtsNowPlaying\EtsNowPlaying.i
 | `[radio] cover_lookup` | `1` | Look up song covers for radio titles (see [Privacy](#privacy)). `0` turns it off. |
 | `[radio] pause_after_ms` | `2500` | No stream data for this long means the radio is paused (adapts to the stream). |
 | `[radio] switch_hold_ms` | `600` | Keep the radio screen this long after a stream ends, so station changes do not flash Spotify. |
-| `[features] force_stage` | `-1` | `-1` = automatic crash fallback. `0..3` forces a [stage](#safe-mode). |
+| `[features] force_stage` | `-1` | `-1` = automatic crash fallback. `0..4` forces a [stage](#safe-mode). |
+| `[beta] touch` | `1` | Mouse control of the screen (this branch only, see [Beta: touch control](#beta-touch-control)). |
 
 ## How it works
 
@@ -72,6 +73,18 @@ The plugin is a normal SCS telemetry plugin that does four things inside the gam
 Engine hooks are found by byte signatures, so they survive most game updates. If a signature stops matching after a big update,
 the plugin simply stays passive and writes the reason to its log.
 
+## Beta: touch control
+
+> **Experimental – this is the `beta/touch` branch.** It may misbehave on your setup; the crash fallback turns it off first.
+
+With the mouse cursor visible in the cabin (do not hold the right mouse button, that is look-around) you can click the
+**⏮ ⏯ ⏭** buttons on the Spotify screen. A small ring on the screen shows where the plugin thinks the cursor is.
+
+How it works: while the game draws the screen mesh, the plugin repeats that draw call into a 1×1 render target that only covers
+the pixel under the mouse cursor, using a probe texture whose texels contain their own texture coordinates. Reading the pixel back
+gives the position on the screen. The buttons then talk to the player through the Windows media controls.
+
+Turn it off with `[beta] touch=0`. If something looks off, please send `diag.log` (lines starting with `TOUCH`).
 ## Safe mode
 
 Hooking a game can go wrong on some driver/game combinations. The plugin remembers whether the last session ended cleanly.
@@ -80,9 +93,10 @@ After a crash it takes one step back on the next start:
 | Stage | What is on |
 |---|---|
 | 0 | everything |
-| 1 | no frame upload (screen texture swapped, but not filled) |
-| 2 | additionally the game's own GPS UI stays on |
-| 3 | display off, only logging |
+| 1 | no touch input (beta) |
+| 2 | additionally no frame upload (screen texture swapped, but not filled) |
+| 3 | additionally the game's own GPS UI stays on |
+| 4 | display off, only logging |
 
 A clean exit keeps the stage; delete `state.ini` (or set `force_stage=0`) to go back to stage 0.
 If you hit this, please attach `diag.log` and `diag.prev.log` to an issue.

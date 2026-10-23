@@ -31,4 +31,8 @@ void MediaStart();
 void MediaStop();
 MediaSnapshot MediaGetSnapshot();
 
+// Playback control of the current media app (executed on the media thread).
+enum class MediaCommand { None, Previous, PlayPause, Next };
+void MediaSendCommand(MediaCommand cmd);
+
 }  // namespace ep

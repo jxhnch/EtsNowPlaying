@@ -6,6 +6,8 @@
 #include "radio_tracker.h"
 #include "settings.h"
 #include "text_util.h"
+#include "touch.h"
+#include "touch_layout.h"
 
 #include <d2d1.h>
 #include <dwrite.h>
@@ -157,6 +159,9 @@ private:
     void SetCover(const CoverBytes& bytes, uint64_t key);
     void DrawCover(float x, float y, float size);
     void DrawClock();
+    void FillTriangle(D2D1_POINT_2F a, D2D1_POINT_2F b, D2D1_POINT_2F c);
+    void DrawControls(const MediaSnapshot& m);
+    void DrawTouchCursor();
     void DrawMedia(const MediaSnapshot& m, double t);
     void DrawRadio(const RadioSnapshot& r, double t);
     void DrawIdle(double t);
@@ -384,28 +389,69 @@ void Renderer::DrawMedia(const MediaSnapshot& m, double t) {
              DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
-    // Play / pause badge.
-    const float bx = x0 + 24, by = 420, br = 24;
-    brush_->SetColor(Rgb(1, 1, 1));
-    rt_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bx, by), br, br), brush_.Get());
-    brush_->SetColor(Rgb(0.05f, 0.05f, 0.06f));
-    if (m.playing) {
-        rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(bx - 9, by - 11, bx - 3, by + 11), 2, 2), brush_.Get());
-        rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(bx + 3, by - 11, bx + 9, by + 11), 2, 2), brush_.Get());
-    } else {
-        ComPtr<ID2D1PathGeometry> tri;
-        ComPtr<ID2D1GeometrySink> sink;
-        if (SUCCEEDED(d2d_->CreatePathGeometry(tri.GetAddressOf())) && SUCCEEDED(tri->Open(sink.GetAddressOf()))) {
-            sink->BeginFigure(D2D1::Point2F(bx - 7, by - 12), D2D1_FIGURE_BEGIN_FILLED);
-            sink->AddLine(D2D1::Point2F(bx + 12, by));
-            sink->AddLine(D2D1::Point2F(bx - 7, by + 12));
-            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-            sink->Close();
-            rt_->FillGeometry(tri.Get(), brush_.Get());
+    DrawControls(m);
+    (void)t;
+}
+
+void Renderer::FillTriangle(D2D1_POINT_2F a, D2D1_POINT_2F b, D2D1_POINT_2F c) {
+    ComPtr<ID2D1PathGeometry> tri;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(d2d_->CreatePathGeometry(tri.GetAddressOf())) || FAILED(tri->Open(sink.GetAddressOf()))) return;
+    sink->BeginFigure(a, D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine(b);
+    sink->AddLine(c);
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+    rt_->FillGeometry(tri.Get(), brush_.Get());
+}
+
+// Previous / play-pause / next. They react to the mouse (beta touch): hover grows them, a click makes them dip.
+void Renderer::DrawControls(const MediaSnapshot& m) {
+    const TouchState ts = TouchGetState();
+    const Button hovered = ts.hover ? HitTestButtons(ts.x, ts.y) : Button::None;
+    const bool flash = ts.clickTick && GetTickCount64() - ts.clickTick < 220;
+    const Button clicked = flash ? HitTestButtons(ts.clickX, ts.clickY) : Button::None;
+
+    for (const ButtonSpec& b : kButtons) {
+        const bool main = b.id == Button::PlayPause;
+        float r = b.r + (hovered == b.id ? 3.0f : 0.0f) - (clicked == b.id ? 3.0f : 0.0f);
+        const D2D1_POINT_2F c = D2D1::Point2F(b.cx, b.cy);
+        brush_->SetColor(main ? Rgb(1, 1, 1) : Rgb(1, 1, 1, hovered == b.id ? 0.32f : 0.16f));
+        rt_->FillEllipse(D2D1::Ellipse(c, r, r), brush_.Get());
+        if (hovered == b.id) {
+            brush_->SetColor(Rgb(accent_.r, accent_.g, accent_.b, 0.95f));
+            rt_->DrawEllipse(D2D1::Ellipse(c, r + 3, r + 3), brush_.Get(), 2.5f);
+        }
+
+        brush_->SetColor(main ? Rgb(0.05f, 0.05f, 0.06f) : Rgb(1, 1, 1));
+        if (b.id == Button::PlayPause) {
+            if (m.playing) {
+                rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(c.x - 10, c.y - 12, c.x - 3, c.y + 12), 2, 2), brush_.Get());
+                rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(c.x + 3, c.y - 12, c.x + 10, c.y + 12), 2, 2), brush_.Get());
+            } else {
+                FillTriangle(D2D1::Point2F(c.x - 8, c.y - 13), D2D1::Point2F(c.x + 13, c.y), D2D1::Point2F(c.x - 8, c.y + 13));
+            }
+        } else if (b.id == Button::Previous) {
+            rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(c.x - 10, c.y - 9, c.x - 6, c.y + 9), 1.5f, 1.5f), brush_.Get());
+            FillTriangle(D2D1::Point2F(c.x + 9, c.y - 9), D2D1::Point2F(c.x - 4, c.y), D2D1::Point2F(c.x + 9, c.y + 9));
+        } else {
+            rt_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(c.x + 6, c.y - 9, c.x + 10, c.y + 9), 1.5f, 1.5f), brush_.Get());
+            FillTriangle(D2D1::Point2F(c.x - 9, c.y - 9), D2D1::Point2F(c.x + 4, c.y), D2D1::Point2F(c.x - 9, c.y + 9));
         }
     }
-    Text(m.playing ? L"Playing" : L"Paused", bx + 40, by - 14, 200, 28, 18, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f));
-    (void)t;
+    Text(m.playing ? L"Playing" : L"Paused", 556, 406, 200, 28, 18, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f));
+}
+
+// The mouse pointer on the screen (beta touch), so you can see where the plugin thinks you are pointing.
+void Renderer::DrawTouchCursor() {
+    const TouchState ts = TouchGetState();
+    if (!ts.hover) return;
+    const D2D1_POINT_2F p = D2D1::Point2F(ts.x, ts.y);
+    brush_->SetColor(Rgb(0, 0, 0, 0.55f));
+    rt_->DrawEllipse(D2D1::Ellipse(p, 11, 11), brush_.Get(), 4.0f);
+    brush_->SetColor(Rgb(1, 1, 1, 0.95f));
+    rt_->DrawEllipse(D2D1::Ellipse(p, 11, 11), brush_.Get(), 2.0f);
+    rt_->FillEllipse(D2D1::Ellipse(p, 2.5f, 2.5f), brush_.Get());
 }
 
 void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
@@ -577,10 +623,15 @@ void Renderer::Frame(double t) {
 
     rt_->BeginDraw();
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    bool buttons = false;
     if (radio.active) DrawRadio(radio, t);
     else if (holdRadio) DrawRadio(lastRadio_, t);
-    else if (media.hasSession && !media.title.empty()) DrawMedia(media, t);
-    else DrawIdle(t);
+    else if (media.hasSession && !media.title.empty()) {
+        DrawMedia(media, t);
+        buttons = true;
+    } else DrawIdle(t);
+    TouchSetButtonsVisible(buttons);
+    DrawTouchCursor();
     HRESULT hr = rt_->EndDraw();
     if (FAILED(hr)) {
         Logf("RENDER EndDraw failed: 0x%08lx", static_cast<unsigned long>(hr));

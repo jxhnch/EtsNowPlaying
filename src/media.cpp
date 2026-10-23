@@ -33,6 +33,7 @@ std::mutex g_mutex;
 MediaSnapshot g_snap;
 std::thread g_thread;
 std::atomic<bool> g_stop{false};
+std::atomic<int> g_pendingCommand{static_cast<int>(MediaCommand::None)};
 
 std::string Utf8(winrt::hstring const& s) {
     if (s.empty()) return {};
@@ -90,6 +91,14 @@ void Run() {
         while (!g_stop) {
             try {
                 Session session = PickSession(manager);
+                auto command = static_cast<MediaCommand>(g_pendingCommand.exchange(static_cast<int>(MediaCommand::None)));
+                if (session && command != MediaCommand::None) {
+                    bool ok = false;
+                    if (command == MediaCommand::PlayPause) ok = session.TryTogglePlayPauseAsync().get();
+                    else if (command == MediaCommand::Next) ok = session.TrySkipNextAsync().get();
+                    else if (command == MediaCommand::Previous) ok = session.TrySkipPreviousAsync().get();
+                    Logf("MEDIA command %d -> %s", static_cast<int>(command), ok ? "ok" : "refused by the player");
+                }
                 MediaSnapshot next;
                 {
                     std::lock_guard<std::mutex> lock(g_mutex);
@@ -152,7 +161,8 @@ void Run() {
                 Logf("MEDIA poll failed: 0x%08x", static_cast<unsigned>(e.code().value));
             }
             ++tick;
-            for (int i = 0; i < 5 && !g_stop; ++i) Sleep(100);
+            // Poll twice a second, but react to a button press within ~50 ms.
+            for (int i = 0; i < 10 && !g_stop && g_pendingCommand.load() == static_cast<int>(MediaCommand::None); ++i) Sleep(50);
         }
     } catch (winrt::hresult_error const& e) {
         Logf("MEDIA failed to start: 0x%08x", static_cast<unsigned>(e.code().value));
@@ -172,6 +182,8 @@ void MediaStop() {
     g_stop = true;
     if (g_thread.joinable()) g_thread.join();
 }
+
+void MediaSendCommand(MediaCommand cmd) { g_pendingCommand = static_cast<int>(cmd); }
 
 MediaSnapshot MediaGetSnapshot() {
     std::lock_guard<std::mutex> lock(g_mutex);

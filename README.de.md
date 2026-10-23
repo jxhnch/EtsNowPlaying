@@ -53,7 +53,8 @@ Die Datei liegt unter `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\EtsNowPlay
 | `[radio] cover_lookup` | `1` | Song-Cover für Radiotitel suchen (siehe [Datenschutz](#datenschutz)). `0` schaltet es ab. |
 | `[radio] pause_after_ms` | `2500` | So lange keine Stream-Daten = Radio pausiert (passt sich dem Stream an). |
 | `[radio] switch_hold_ms` | `600` | So lange bleibt die Radio-Anzeige nach Ende eines Streams, damit Senderwechsel nicht kurz Spotify zeigen. |
-| `[features] force_stage` | `-1` | `-1` = automatischer Absturz-Rückfall. `0..3` erzwingt eine [Stufe](#abgesicherter-modus). |
+| `[features] force_stage` | `-1` | `-1` = automatischer Absturz-Rückfall. `0..4` erzwingt eine [Stufe](#abgesicherter-modus). |
+| `[beta] touch` | `1` | Maus-Bedienung des Displays (nur dieser Branch, siehe [Beta: Touch-Bedienung](#beta-touch-bedienung)). |
 
 ## So funktioniert es
 
@@ -71,6 +72,18 @@ Das Plugin ist ein normales SCS-Telemetrie-Plugin und macht vier Dinge im Spielp
 Die Engine-Hooks werden über Byte-Signaturen gefunden und überleben die meisten Spiel-Updates. Passt eine Signatur nach einem großen
 Update nicht mehr, bleibt das Plugin einfach passiv und schreibt den Grund ins Log.
 
+## Beta: Touch-Bedienung
+
+> **Experimentell – das ist der Branch `beta/touch`.** Er kann bei dir Probleme machen; der Absturz-Rückfall schaltet ihn als Erstes ab.
+
+Ist der Mauszeiger in der Kabine sichtbar (rechte Maustaste nicht gedrückt, die ist zum Umschauen), kannst du auf dem Spotify-Display die
+Tasten **⏮ ⏯ ⏭** anklicken. Ein kleiner Ring zeigt, wo das Plugin den Zeiger vermutet.
+
+So funktioniert es: Während das Spiel das Display zeichnet, wiederholt das Plugin diesen Zeichenaufruf in ein 1×1-Ziel, das nur das Pixel
+unter dem Mauszeiger abdeckt, mit einer Probe-Textur, deren Texel ihre eigenen Texturkoordinaten enthalten. Das ausgelesene Pixel verrät
+die Position auf dem Display. Die Tasten steuern den Player über die Windows-Mediensteuerung.
+
+Abschalten mit `[beta] touch=0`. Wenn etwas nicht stimmt, schick bitte das `diag.log` (Zeilen mit `TOUCH`).
 ## Abgesicherter Modus
 
 Hooks in einem Spiel können mit manchen Treiber-/Spiel-Kombinationen schiefgehen. Das Plugin merkt sich, ob die letzte Sitzung sauber
@@ -79,9 +92,10 @@ endete. Nach einem Absturz geht es beim nächsten Start einen Schritt zurück:
 | Stufe | Was an ist |
 |---|---|
 | 0 | alles |
-| 1 | kein Bild-Upload (Textur getauscht, aber nicht gefüllt) |
-| 2 | zusätzlich bleibt die GPS-Oberfläche des Spiels an |
-| 3 | Anzeige aus, nur Logging |
+| 1 | keine Touch-Bedienung (Beta) |
+| 2 | zusätzlich kein Bild-Upload (Textur getauscht, aber nicht gefüllt) |
+| 3 | zusätzlich bleibt die GPS-Oberfläche des Spiels an |
+| 4 | Anzeige aus, nur Logging |
 
 Ein sauberes Beenden behält die Stufe; lösche `state.ini` (oder setze `force_stage=0`), um zu Stufe 0 zurückzukehren.
 Falls das bei dir passiert, hänge bitte `diag.log` und `diag.prev.log` an ein Issue.

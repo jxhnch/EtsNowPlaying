@@ -27,23 +27,26 @@ Features SafeModeBegin(const std::wstring& dir) {
     int running = static_cast<int>(GetPrivateProfileIntW(L"state", L"running", 0, g_statePath.c_str()));
     int forced = static_cast<int>(GetPrivateProfileIntW(L"features", L"force_stage", -1, ini.c_str()));
 
+    constexpr int kLastStage = 4;
     if (forced >= 0) {
-        stage = forced > 3 ? 3 : forced;
+        stage = forced > kLastStage ? kLastStage : forced;
         Logf("SAFE stage forced to %d by EtsNowPlaying.ini", stage);
     } else if (running) {
-        stage = stage < 3 ? stage + 1 : 3;
+        stage = stage < kLastStage ? stage + 1 : kLastStage;
         Logf("SAFE the previous run did not end cleanly (game crash?) -> stage %d", stage);
     } else {
         Logf("SAFE previous run ended cleanly, stage %d", stage);
     }
     WriteState(stage, 1);
 
+    // Beta ladder: the experimental touch input is the first thing to go.
     Features f;
     f.stage = stage;
-    f.upload = stage < 1;
-    f.disableGameGps = stage < 2;
-    f.screen = stage < 3;
-    Logf("SAFE features: screen=%d disableGameGps=%d upload=%d", f.screen, f.disableGameGps, f.upload);
+    f.touch = stage < 1;
+    f.upload = stage < 2;
+    f.disableGameGps = stage < 3;
+    f.screen = stage < 4;
+    Logf("SAFE features: screen=%d disableGameGps=%d upload=%d touch=%d", f.screen, f.disableGameGps, f.upload, f.touch);
     return f;
 }
 

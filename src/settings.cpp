@@ -28,8 +28,8 @@ void LoadSettings(const std::wstring& dir) {
                 "; EtsNowPlaying settings. Delete a line to get its default back.\r\n"
                 "[features]\r\n"
                 "; -1 = automatic: after a game crash the plugin switches parts off step by step.\r\n"
-                ";  0 = everything on, 1 = no frame upload, 2 = also keep the game's own GPS UI,\r\n"
-                ";  3 = display off (log only). Set 0..3 to force a stage and disable the automatic fallback.\r\n";
+                ";  0 = everything on, 1 = no touch input, 2 = also no frame upload, 3 = also keep the game's own\r\n"
+                ";  GPS UI, 4 = display off (log only). Set 0..4 to force a stage and disable the automatic fallback.\r\n";
             fwrite(text, 1, sizeof(text) - 1, f);
             fclose(f);
         }
@@ -43,11 +43,13 @@ void LoadSettings(const std::wstring& dir) {
     WritePrivateProfileStringW(L"radio", L"hold_ms", nullptr, ini.c_str());
     EnsureKey(ini, L"radio", L"pause_after_ms", L"2500");
     EnsureKey(ini, L"radio", L"switch_hold_ms", L"600");
+    EnsureKey(ini, L"beta", L"touch", L"1");
 
     g_settings.flipVertical = GetPrivateProfileIntW(L"screen", L"flip_vertical", 1, ini.c_str()) != 0;
     g_settings.coverLookup = GetPrivateProfileIntW(L"radio", L"cover_lookup", 1, ini.c_str()) != 0;
     g_settings.radioStaleMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"pause_after_ms", 2500, ini.c_str()));
     g_settings.radioHoldMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"switch_hold_ms", 600, ini.c_str()));
+    g_settings.touch = GetPrivateProfileIntW(L"beta", L"touch", 1, ini.c_str()) != 0;
 
     wchar_t filter[128] = {};
     GetPrivateProfileStringW(L"media", L"app_filter", L"spotify", filter, 128, ini.c_str());
@@ -57,8 +59,9 @@ void LoadSettings(const std::wstring& dir) {
     for (auto& c : f) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     g_settings.appFilter = f;
 
-    Logf("SETTINGS flip_vertical=%d app_filter='%s' cover_lookup=%d stale_ms=%d hold_ms=%d", g_settings.flipVertical,
-         g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.radioStaleMs, g_settings.radioHoldMs);
+    Logf("SETTINGS flip_vertical=%d app_filter='%s' cover_lookup=%d pause_after_ms=%d switch_hold_ms=%d touch=%d",
+         g_settings.flipVertical, g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.radioStaleMs,
+         g_settings.radioHoldMs, g_settings.touch);
 }
 
 }  // namespace ep

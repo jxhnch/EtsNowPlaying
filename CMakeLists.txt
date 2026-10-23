@@ -21,6 +21,7 @@ add_library(EtsNowPlaying SHARED
     src/engine_hooks.cpp
     src/screen_assets.cpp
     src/d3d11_hooks.cpp
+    src/touch.cpp
     src/net_hooks.cpp
     src/radio_tracker.cpp
     src/station_db.cpp

@@ -4,6 +4,7 @@
 #include "log.h"
 #include "renderer.h"
 #include "screen_assets.h"
+#include "touch.h"
 
 #include <MinHook.h>
 #include <d3d11.h>
@@ -163,6 +164,7 @@ void OnPlaceholderViewCreated(ID3D11Device* dev, ID3D11ShaderResourceView* gameV
     ID3D11ShaderResourceView* old = g_ourSrv;
     g_ourSrv = ours;
     g_ourSrvAtomic = ours;
+    TouchSetScreenView(ours);
     if (old) old->Release();  // leaked bind slots keep their own reference
     AddSwapSrv(gameView);
     Logf("SCREEN game view %p of the placeholder will show our texture (%s)", static_cast<void*>(gameView),
@@ -349,9 +351,11 @@ void STDMETHODCALLTYPE HookPSSetSRV(ID3D11DeviceContext* ctx, UINT start, UINT n
     ID3D11ShaderResourceView* const* srvs = srvsIn;
     if (ID3D11ShaderResourceView* ours = g_ourSrvAtomic.load(std::memory_order_relaxed)) {
         bool any = false;
+        bool isScreen[128];
         for (UINT i = 0; i < n; ++i) {
             ID3D11ShaderResourceView* s = srvsIn[i];
-            if (s && IsSwapSrv(s)) {
+            isScreen[i] = s && IsSwapSrv(s);
+            if (isScreen[i]) {
                 if (!any) {
                     memcpy(swapped, srvsIn, n * sizeof(swapped[0]));
                     any = true;
@@ -360,6 +364,7 @@ void STDMETHODCALLTYPE HookPSSetSRV(ID3D11DeviceContext* ctx, UINT start, UINT n
             }
         }
         if (any) srvs = swapped;
+        if (any || TouchHasBindings()) TouchNoteBind(ctx, start, n, isScreen);  // beta: where is the screen bound?
     }
 
     int mode = g_mode.load(std::memory_order_relaxed);
@@ -504,12 +509,13 @@ bool ForegroundIsUs() {
     return pid == GetCurrentProcessId();
 }
 
-void OnFrame() {
+void OnFrame(IDXGISwapChain* sc) {
     static bool down[4] = {};
     static const int keys[4] = {VK_F6, VK_F7, VK_F8, VK_F9};
 
     if (g_mode.load() == kRecording && GetTickCount64() >= g_recordUntil) FinishRecording();
     UploadScreenFrame();
+    TouchOnPresent(sc);
 
     bool chord = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && ForegroundIsUs();
     for (int i = 0; i < 4; ++i) {
@@ -522,15 +528,34 @@ void OnFrame() {
 thread_local int t_presentDepth = 0;
 
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* sc, UINT sync, UINT flags) {
-    if (!g_off && t_presentDepth == 0) OnFrame();
+    if (!g_off && t_presentDepth == 0) OnFrame(sc);
     ++t_presentDepth;
     HRESULT hr = g_present(sc, sync, flags);
     --t_presentDepth;
     return hr;
 }
 
+// Beta touch: the draw calls that show the screen are repeated once into a 1x1 probe target.
+using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
+using DrawIndexedInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
+DrawIndexedFn g_drawIndexed;
+DrawIndexedInstancedFn g_drawIndexedInstanced;
+
+void STDMETHODCALLTYPE HookDrawIndexed(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
+    if (!g_off && TouchNeedsReplay(ctx)) TouchReplay(ctx, [&] { g_drawIndexed(ctx, count, start, base); });
+    g_drawIndexed(ctx, count, start, base);
+}
+
+void STDMETHODCALLTYPE HookDrawIndexedInstanced(ID3D11DeviceContext* ctx, UINT count, UINT instances, UINT start, INT base,
+                                                UINT startInstance) {
+    if (!g_off && TouchNeedsReplay(ctx)) {
+        TouchReplay(ctx, [&] { g_drawIndexedInstanced(ctx, count, instances, start, base, startInstance); });
+    }
+    g_drawIndexedInstanced(ctx, count, instances, start, base, startInstance);
+}
+
 HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* pp) {
-    if (!g_off && t_presentDepth == 0) OnFrame();
+    if (!g_off && t_presentDepth == 0) OnFrame(sc);
     ++t_presentDepth;
     HRESULT hr = g_present1(sc, sync, flags, pp);
     --t_presentDepth;
@@ -541,7 +566,7 @@ LRESULT CALLBACK DummyWndProc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWi
 
 }  // namespace
 
-bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames) {
+bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames, bool touch) {
     g_replaceTexture = replaceTexture;
     g_uploadFrames = uploadFrames;
     WNDCLASSEXW wc{sizeof(wc)};
@@ -580,6 +605,8 @@ bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames) {
     void* createTex2D = vt(dev)[5];
     void* createSrv = vt(dev)[7];
     void* psSetSrv = vt(ctx)[8];
+    void* drawIndexed = vt(ctx)[12];
+    void* drawIndexedInstanced = vt(ctx)[20];
     void* present1 = nullptr;
     IDXGISwapChain1* sc1 = nullptr;
     if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&sc1)))) {
@@ -609,11 +636,18 @@ bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames) {
     hook("CreateShaderResourceView", createSrv, reinterpret_cast<void*>(&HookCreateSRV),
          reinterpret_cast<void**>(&g_createSrv));
     hook("PSSetShaderResources", psSetSrv, reinterpret_cast<void*>(&HookPSSetSRV),
-         reinterpret_cast<void**>(&g_psSetSrv));    if (!ok) return false;
+         reinterpret_cast<void**>(&g_psSetSrv));
+    if (touch) {  // draw hooks cost a little on every draw call, so only when the beta feature is on
+        hook("DrawIndexed", drawIndexed, reinterpret_cast<void*>(&HookDrawIndexed), reinterpret_cast<void**>(&g_drawIndexed));
+        hook("DrawIndexedInstanced", drawIndexedInstanced, reinterpret_cast<void*>(&HookDrawIndexedInstanced),
+             reinterpret_cast<void**>(&g_drawIndexedInstanced));
+    }
+    if (!ok) return false;
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
         Logf("D3D11 MH_EnableHook failed");
         return false;
     }
+    TouchInit(touch, g_psSetSrv);
     Logf("D3D11 hooks installed (Present=%p Present1=%p CreateTex2D=%p CreateSRV=%p PSSetSRV=%p)", present, present1,
          createTex2D, createSrv, psSetSrv);
     return true;
