@@ -38,7 +38,7 @@ void LoadSettings(const std::wstring& dir) {
                 "; 1 = flip the picture vertically. Set to 0 if the screen is upside down.\r\n"
                 "flip_vertical=1\r\n"
                 "; Experimental: 1 = fit the picture to the shape of each truck's display. 2 = only measure and log. 0 = off.\r\n"
-                "auto_fit=0\r\n"
+                "auto_fit=1\r\n"
                 "\r\n"
                 "[media]\r\n"
                 "; Only show media from apps whose name contains this text. Empty = any player.\r\n"
