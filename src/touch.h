@@ -19,6 +19,8 @@ struct TouchState {
     float x = 0, y = 0;       // position in screen-image pixels (800x480, origin top-left)
     uint64_t clickTick = 0;   // GetTickCount64() of the last click on the screen, 0 = never
     float clickX = 0, clickY = 0;
+    bool dragging = false;    // the progress bar is being dragged
+    float dragFrac = 0;       // 0..1, where the drag currently points
 };
 
 using PsSetSrvFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);

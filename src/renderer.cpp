@@ -402,22 +402,27 @@ void Renderer::DrawMedia(const MediaSnapshot& m, double t) {
 
     DrawCover(40, 80, 280);
 
-    const float x0 = 360, w = canvasW_ - x0 - 40;  // the text column takes the width of the display
+    const float x0 = kBarX, w = BarWidth(canvasW_);  // the text column takes the width of the display
     Text(ToWide(m.title), x0, 84, w, 112, 38, DWRITE_FONT_WEIGHT_SEMI_BOLD, Rgb(1, 1, 1), true);
     Text(ToWide(m.artist), x0, 202, w, 36, 24, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.82f));
     Text(ToWide(m.album), x0, 240, w, 28, 18, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.5f));
 
     if (m.duration > 1.0) {
-        double pos = m.PositionNow();
-        float frac = static_cast<float>(std::clamp(pos / m.duration, 0.0, 1.0));
-        const float py = 330, ph = 8;
+        const TouchState ts = TouchGetState();
+        const bool dragging = ts.dragging;
+        const bool overBar = ts.hover && HitProgressBar(ts.x, ts.y, canvasW_);
+        float frac = static_cast<float>(std::clamp(m.PositionNow() / m.duration, 0.0, 1.0));
+        if (dragging) frac = ts.dragFrac;
+        const double pos = frac * m.duration;
+        const float py = kBarY - (overBar || dragging ? 2.0f : 0.0f), ph = kBarH + (overBar || dragging ? 4.0f : 0.0f);
         Fill(D2D1::RoundedRect(D2D1::RectF(x0, py, x0 + w, py + ph), 4, 4), Rgb(1, 1, 1, 0.16f));
         if (frac > 0.002f) {
             Fill(D2D1::RoundedRect(D2D1::RectF(x0, py, x0 + std::max(w * frac, ph), py + ph), 4, 4),
                  Rgb(std::min(accent_.r * 1.1f, 1.0f), std::min(accent_.g * 1.1f, 1.0f), std::min(accent_.b * 1.1f, 1.0f)));
         }
         brush_->SetColor(Rgb(1, 1, 1));
-        rt_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x0 + w * frac, py + ph / 2), 8, 8), brush_.Get());
+        const float knob = overBar || dragging ? 11.0f : 8.0f;
+        rt_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x0 + w * frac, py + ph / 2), knob, knob), brush_.Get());
         Text(Duration(pos), x0, py + 18, 100, 24, 16, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.6f));
         Text(Duration(m.duration), x0 + w - 100, py + 18, 100, 24, 16, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.6f), false,
              DWRITE_TEXT_ALIGNMENT_TRAILING);

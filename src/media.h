@@ -34,5 +34,7 @@ MediaSnapshot MediaGetSnapshot();
 // Playback control of the current media app (executed on the media thread).
 enum class MediaCommand { None, Previous, PlayPause, Next };
 void MediaSendCommand(MediaCommand cmd);
+// Jump to a position (seconds) in the current track. The snapshot follows at once, without waiting for the player.
+void MediaSeek(double seconds);
 
 }  // namespace ep

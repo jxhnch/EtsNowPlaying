@@ -10,6 +10,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <thread>
 
@@ -34,6 +35,7 @@ MediaSnapshot g_snap;
 std::thread g_thread;
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_pendingCommand{static_cast<int>(MediaCommand::None)};
+std::atomic<double> g_pendingSeek{-1.0};  // seconds, < 0 = none
 
 std::string Utf8(winrt::hstring const& s) {
     if (s.empty()) return {};
@@ -86,6 +88,8 @@ void Run() {
         Logf("MEDIA SMTC manager ready");
 
         std::string trackKey;
+        double seekTarget = 0;  // after a seek the player takes a moment to report the new position: show ours meanwhile
+        auto seekTime = std::chrono::steady_clock::now() - std::chrono::hours(1);
         int coverTries = 0;
         int tick = 0;
         while (!g_stop) {
@@ -98,6 +102,16 @@ void Run() {
                     else if (command == MediaCommand::Next) ok = session.TrySkipNextAsync().get();
                     else if (command == MediaCommand::Previous) ok = session.TrySkipPreviousAsync().get();
                     Logf("MEDIA command %d -> %s", static_cast<int>(command), ok ? "ok" : "refused by the player");
+                }
+                const double seek = g_pendingSeek.exchange(-1.0);
+                if (session && seek >= 0) {
+                    auto tlNow = session.GetTimelineProperties();
+                    auto ticks = tlNow.StartTime() + std::chrono::duration_cast<winrt::Windows::Foundation::TimeSpan>(
+                                                         std::chrono::duration<double>(seek));
+                    bool ok = session.TryChangePlaybackPositionAsync(ticks.count()).get();
+                    seekTarget = seek;
+                    seekTime = std::chrono::steady_clock::now();
+                    Logf("MEDIA seek to %.1fs -> %s", seek, ok ? "ok" : "refused by the player");
                 }
                 MediaSnapshot next;
                 {
@@ -125,6 +139,12 @@ void Run() {
                     double age = std::chrono::duration<double>(winrt::clock::now() - tl.LastUpdatedTime()).count();
                     next.position = raw + (next.playing ? std::max(age, 0.0) : 0.0);
                     next.sampledAt = std::chrono::steady_clock::now();
+                    {
+                        // Within a second and a half of a seek, a position far from the target is the old one.
+                        const double since = std::chrono::duration<double>(next.sampledAt - seekTime).count();
+                        const double expected = seekTarget + (next.playing ? since : 0.0);
+                        if (since < 1.5 && std::fabs(next.position - expected) > 2.5) next.position = expected;
+                    }
 
                     std::string key = next.app + "|" + next.title + "|" + next.artist + "|" + next.album;
                     if (key != trackKey) {
@@ -162,7 +182,10 @@ void Run() {
             }
             ++tick;
             // Poll twice a second, but react to a button press within ~50 ms.
-            for (int i = 0; i < 10 && !g_stop && g_pendingCommand.load() == static_cast<int>(MediaCommand::None); ++i) Sleep(50);
+            for (int i = 0; i < 10 && !g_stop && g_pendingCommand.load() == static_cast<int>(MediaCommand::None) && g_pendingSeek.load() < 0;
+                 ++i) {
+                Sleep(50);
+            }
         }
     } catch (winrt::hresult_error const& e) {
         Logf("MEDIA failed to start: 0x%08x", static_cast<unsigned>(e.code().value));
@@ -184,6 +207,13 @@ void MediaStop() {
 }
 
 void MediaSendCommand(MediaCommand cmd) { g_pendingCommand = static_cast<int>(cmd); }
+
+void MediaSeek(double seconds) {
+    g_pendingSeek = std::max(0.0, seconds);
+    std::lock_guard<std::mutex> lock(g_mutex);  // the display jumps right away
+    g_snap.position = std::max(0.0, seconds);
+    g_snap.sampledAt = std::chrono::steady_clock::now();
+}
 
 MediaSnapshot MediaGetSnapshot() {
     std::lock_guard<std::mutex> lock(g_mutex);
