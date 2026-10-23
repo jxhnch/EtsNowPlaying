@@ -8,7 +8,7 @@
 
 namespace ep {
 
-// EXPERIMENTAL (beta/touch): use the mouse on the cabin screen.
+// Use the mouse on the cabin screen.
 //
 // Picking: while the game draws the screen mesh with our texture, the same draw call is repeated into a
 // 1x1 render target that only covers the pixel under the mouse cursor, with a probe texture bound whose

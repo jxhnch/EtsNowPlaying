@@ -30,6 +30,7 @@ add_library(EtsNowPlaying SHARED
     src/text_util.cpp
     src/http.cpp
     src/cover_lookup.cpp
+    src/station_logo.cpp
     src/renderer.cpp
     src/exports.def)
 set_target_properties(EtsNowPlaying PROPERTIES PREFIX "")

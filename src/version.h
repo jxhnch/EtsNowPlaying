@@ -1,3 +1,3 @@
 #pragma once
 
-#define ETSNP_VERSION "0.2.0-beta.touch"
+#define ETSNP_VERSION "1.0.0"

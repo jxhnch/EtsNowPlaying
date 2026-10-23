@@ -8,6 +8,7 @@
 #include "net_hooks.h"
 #include "radio_tracker.h"
 #include "renderer.h"
+#include "station_logo.h"
 #include "safe_mode.h"
 #include "screen_assets.h"
 #include "settings.h"
@@ -59,7 +60,6 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
     ep::Logf("EtsNowPlaying v" ETSNP_VERSION ", game_id='%s' game_name='%s' telemetry=%u.%u", gameId.c_str(),
              p->common.game_name ? p->common.game_name : "", SCS_GET_MAJOR_VERSION(version),
              SCS_GET_MINOR_VERSION(version));
-    ep::Logf("Texture finder: Ctrl+Shift+F6 start, F7 = GPS painted magenta, F8 = not painted, F9 stop");
 
     try {
         MH_STATUS st = MH_Initialize();
@@ -77,6 +77,7 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
         bool gfx = ep::D3D11HooksInstall(features.screen, features.upload, features.touch && ep::GetSettings().touch);
         ep::MediaStart();
         ep::CoverLookupStart();
+        ep::StationLogoStart();
         ep::RendererStart();
         ep::Logf("init done: net=%d engine=%d d3d11=%d", net, engine, gfx);
         GameLog(SCS_LOG_TYPE_message, "[EtsNowPlaying] started, see Documents\\...\\EtsNowPlaying\\diag.log");
@@ -92,6 +93,7 @@ extern "C" SCSAPI_VOID scs_telemetry_shutdown(void) {
     ep::EngineHooksDisable();
     ep::D3D11HooksDisable();
     ep::RendererStop();
+    ep::StationLogoStop();
     ep::CoverLookupStop();
     ep::MediaStop();
     ep::RadioTrackerShutdown();

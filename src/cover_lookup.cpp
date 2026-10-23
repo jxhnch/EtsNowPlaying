@@ -27,116 +27,112 @@ std::string g_pending;             // newest title waiting for the worker
 std::thread g_thread;
 std::atomic<bool> g_stop{false};
 
-// Lower case, letters and digits only: "Don't Stop (Radio Edit)" -> "dontstopradioedit"
-std::wstring Normalize(const std::wstring& s) {
-    std::wstring out;
-    for (wchar_t c : s) {
-        if (iswalnum(c)) out.push_back(static_cast<wchar_t>(towlower(c)));
-    }
-    return out;
+// What we are looking for, in several spellings.
+struct Wanted {
+    std::wstring artist;       // as sent by the station
+    std::wstring firstArtist;  // "A & B feat. C" -> "A"
+    std::wstring track;        // without brackets / "- Remastered"
+    std::wstring artistKey, firstKey, trackKey;
+};
+
+// A hit from a catalogue is accepted when the track matches and at least the main artist does.
+bool Accept(const Wanted& w, const std::string& gotArtist, const std::string& gotTrack) {
+    std::wstring ga = NormalizeKey(ToWide(gotArtist));
+    std::wstring gt = NormalizeKey(BaseTitle(ToWide(gotTrack)));
+    if (!SimilarKeys(gt, w.trackKey)) return false;
+    return SimilarKeys(ga, w.artistKey) || SimilarKeys(ga, w.firstKey);
 }
 
-// Drops "(...)" and "[...]" parts: "Song (feat. X) [Remastered]" -> "Song"
-std::wstring StripBrackets(const std::wstring& s) {
-    std::wstring out;
-    int depth = 0;
-    for (wchar_t c : s) {
-        if (c == L'(' || c == L'[') ++depth;
-        else if ((c == L')' || c == L']') && depth > 0) --depth;
-        else if (depth == 0) out.push_back(c);
+bool Download(const std::string& url, std::shared_ptr<const std::vector<uint8_t>>& image) {
+    std::vector<uint8_t> img;
+    if (!HttpGet(ToWide(url), img, 8000, 4u * 1024 * 1024) || img.empty()) {
+        Logf("COVER download failed: %s", url.c_str());
+        return false;
     }
-    return out;
-}
-
-bool Similar(const std::wstring& a, const std::wstring& b) {
-    if (a.empty() || b.empty()) return false;
-    return a.find(b) != std::wstring::npos || b.find(a) != std::wstring::npos;
-}
-
-std::string UrlEncode(const std::string& utf8) {
-    static const char* hex = "0123456789ABCDEF";
-    std::string out;
-    for (unsigned char c : utf8) {
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out.push_back(static_cast<char>(c));
-        else {
-            out.push_back('%');
-            out.push_back(hex[c >> 4]);
-            out.push_back(hex[c & 15]);
-        }
-    }
-    return out;
-}
-
-// Reads the JSON string value following `"key":"` inside `obj`. Handles the usual escapes.
-bool JsonString(const std::string& obj, const char* key, std::string& out) {
-    std::string needle = std::string("\"") + key + "\":\"";
-    size_t p = obj.find(needle);
-    if (p == std::string::npos) return false;
-    p += needle.size();
-    out.clear();
-    while (p < obj.size() && obj[p] != '"') {
-        if (obj[p] == '\\' && p + 1 < obj.size()) {
-            char e = obj[p + 1];
-            if (e == 'u' && p + 5 < obj.size()) {
-                unsigned code = static_cast<unsigned>(strtoul(obj.substr(p + 2, 4).c_str(), nullptr, 16));
-                out += ToUtf8(std::wstring(1, static_cast<wchar_t>(code)));
-                p += 6;
-                continue;
-            }
-            out.push_back(e == 'n' ? '\n' : e);
-            p += 2;
-            continue;
-        }
-        out.push_back(obj[p++]);
-    }
+    image = std::make_shared<std::vector<uint8_t>>(std::move(img));
     return true;
 }
 
-bool Lookup(const std::string& streamTitle, std::shared_ptr<const std::vector<uint8_t>>& image) {
-    std::wstring artist, track;
-    if (!SplitArtistTitle(streamTitle, artist, track)) return false;  // no "Artist - Song": nothing to search for
-    track = StripBrackets(track);
-    if (Normalize(artist).empty() || Normalize(track).empty()) return false;
-
-    std::string term = UrlEncode(ToUtf8(artist + L" " + track));
-    std::wstring url = L"https://itunes.apple.com/search?media=music&entity=song&limit=8&term=" +
+// iTunes Search API: {"results":[{"wrapperType":"track","artistName":"..","trackName":"..","artworkUrl100":".."}, ...]}
+bool SearchITunes(const Wanted& w, const std::wstring& artistTerm, std::shared_ptr<const std::vector<uint8_t>>& image,
+                  std::string& found) {
+    std::string term = UrlEncode(ToUtf8(artistTerm + L" " + w.track));
+    std::wstring url = L"https://itunes.apple.com/search?media=music&entity=song&limit=10&term=" +
                        std::wstring(term.begin(), term.end());
     std::vector<uint8_t> body;
-    if (!HttpGet(url, body, 6000, 1024 * 1024)) {
-        Logf("COVER search failed for '%s'", streamTitle.c_str());
-        return false;
-    }
+    if (!HttpGet(url, body, 6000, 1024 * 1024)) return false;
     std::string json(body.begin(), body.end());
 
-    const std::wstring wantArtist = Normalize(artist), wantTrack = Normalize(StripBrackets(track));
     size_t pos = 0;
     while ((pos = json.find("{\"wrapperType\"", pos)) != std::string::npos) {
         size_t next = json.find("{\"wrapperType\"", pos + 1);
         std::string obj = json.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
         pos = next == std::string::npos ? json.size() : next;
 
-        std::string gotArtist, gotTrack, art;
-        if (!JsonString(obj, "artistName", gotArtist) || !JsonString(obj, "trackName", gotTrack) ||
-            !JsonString(obj, "artworkUrl100", art)) {
-            continue;
-        }
-        if (!Similar(Normalize(ToWide(gotArtist)), wantArtist) || !Similar(Normalize(StripBrackets(ToWide(gotTrack))), wantTrack)) {
+        std::string artist, track, art;
+        if (!JsonString(obj, "artistName", artist) || !JsonString(obj, "trackName", track) ||
+            !JsonString(obj, "artworkUrl100", art) || !Accept(w, artist, track)) {
             continue;
         }
         size_t size = art.find("100x100");
         if (size != std::string::npos) art.replace(size, 7, "600x600");
-        std::vector<uint8_t> img;
-        if (!HttpGet(ToWide(art), img, 8000, 4u * 1024 * 1024) || img.empty()) {
-            Logf("COVER download failed: %s", art.c_str());
-            return false;
-        }
-        image = std::make_shared<std::vector<uint8_t>>(std::move(img));
-        Logf("COVER found for '%s' -> '%s' by '%s' (%zu bytes)", streamTitle.c_str(), gotTrack.c_str(), gotArtist.c_str(),
-             image->size());
+        if (!Download(art, image)) return false;
+        found = "iTunes: '" + track + "' by '" + artist + "'";
         return true;
     }
-    Logf("COVER no match for '%s'", streamTitle.c_str());
     return false;
+}
+
+// Deezer: {"data":[{"id":..,"readable":true,"title":"..","artist":{"name":".."},"album":{"cover_big":".."}}, ...]}
+bool SearchDeezer(const Wanted& w, bool exactFields, std::shared_ptr<const std::vector<uint8_t>>& image, std::string& found) {
+    std::wstring query = exactFields ? L"artist:\"" + w.firstArtist + L"\" track:\"" + w.track + L"\""
+                                     : w.firstArtist + L" " + w.track;
+    std::string q = UrlEncode(ToUtf8(query));
+    std::wstring url = L"https://api.deezer.com/search?limit=10&q=" + std::wstring(q.begin(), q.end());
+    std::vector<uint8_t> body;
+    if (!HttpGet(url, body, 6000, 1024 * 1024)) return false;
+    std::string json(body.begin(), body.end());
+
+    size_t pos = 0;
+    while ((pos = json.find("\"readable\":", pos)) != std::string::npos) {
+        size_t next = json.find("\"readable\":", pos + 1);
+        std::string obj = json.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+        pos = next == std::string::npos ? json.size() : next;
+
+        std::string track, artist, art;
+        if (!JsonString(obj, "title", track)) continue;
+        size_t a = obj.find("\"artist\":{");
+        if (a == std::string::npos || !JsonString(obj.substr(a), "name", artist)) continue;
+        if (!JsonString(obj, "cover_big", art) && !JsonString(obj, "cover_medium", art)) continue;
+        if (!Accept(w, artist, track)) continue;
+        if (!Download(art, image)) return false;
+        found = "Deezer: '" + track + "' by '" + artist + "'";
+        return true;
+    }
+    return false;
+}
+
+bool Lookup(const std::string& streamTitle, std::shared_ptr<const std::vector<uint8_t>>& image) {
+    std::wstring artist, track;
+    if (!SplitArtistTitle(streamTitle, artist, track)) return false;  // no "Artist - Song": nothing to search for
+
+    Wanted w;
+    w.artist = artist;
+    w.firstArtist = FirstArtist(artist);
+    w.track = BaseTitle(track);
+    w.artistKey = NormalizeKey(artist);
+    w.firstKey = NormalizeKey(w.firstArtist);
+    w.trackKey = NormalizeKey(w.track);
+    if (w.firstKey.empty() || w.trackKey.empty()) return false;
+
+    // Several tries, strict to loose, over two catalogues. The first hit with a matching artist and track wins.
+    std::string found;
+    bool ok = SearchITunes(w, w.firstArtist, image, found) || SearchDeezer(w, true, image, found) ||
+              SearchDeezer(w, false, image, found) ||
+              (w.firstArtist != w.artist && SearchITunes(w, w.artist, image, found));
+    if (ok) Logf("COVER found for '%s' -> %s (%zu bytes)", streamTitle.c_str(), found.c_str(), image->size());
+    else Logf("COVER no match for '%s'", streamTitle.c_str());
+    return ok;
 }
 
 void Run() {

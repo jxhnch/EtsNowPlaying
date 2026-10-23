@@ -4,6 +4,7 @@
 #include "log.h"
 #include "renderer.h"
 #include "screen_assets.h"
+#include "settings.h"
 #include "touch.h"
 
 #include <MinHook.h>
@@ -517,6 +518,7 @@ void OnFrame(IDXGISwapChain* sc) {
     UploadScreenFrame();
     TouchOnPresent(sc);
 
+    if (!GetSettings().textureFinder) return;  // developer tool, off unless [debug] texture_finder=1
     bool chord = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && ForegroundIsUs();
     for (int i = 0; i < 4; ++i) {
         bool now = chord && (GetAsyncKeyState(keys[i]) & 0x8000);

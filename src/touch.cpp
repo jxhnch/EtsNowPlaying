@@ -209,7 +209,7 @@ void HandleClick() {
 void TouchInit(bool enabled, PsSetSrvFn originalPsSetSrv) {
     g_enabled = enabled;
     g_psSet = originalPsSetSrv;
-    Logf("TOUCH %s", enabled ? "enabled (beta)" : "disabled");
+    Logf("TOUCH %s", enabled ? "enabled" : "disabled");
 }
 
 void TouchSetScreenView(ID3D11ShaderResourceView* ours) { g_ours = ours; }

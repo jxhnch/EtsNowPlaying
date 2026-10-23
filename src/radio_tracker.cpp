@@ -124,7 +124,9 @@ void PublishLocked(const Conn& c, SOCKET s) {
     g_snap.stationName.clear();
     g_snap.country.clear();
     g_snap.bitrate.clear();
+    g_snap.stationUrl.clear();
     if (c.station >= 0) {
+        g_snap.stationUrl = g_stations.at(c.station).url;
         g_snap.stationName = g_stations.at(c.station).name;
         g_snap.genre = g_stations.at(c.station).genre;
         g_snap.country = g_stations.at(c.station).lang;

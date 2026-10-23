@@ -14,6 +14,7 @@ struct RadioSnapshot {
     std::string genre;
     std::string country;
     std::string bitrate;
+    std::string stationUrl;     // the station's URL in live_streams.sii (empty if the station is not in the list)
     std::string host;
     std::string path;
     std::string icyName;

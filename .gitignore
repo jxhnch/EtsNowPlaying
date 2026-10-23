@@ -7,3 +7,4 @@ build/
 .vs/
 .vscode/
 state.ini
+dev/

@@ -39,7 +39,8 @@ Features SafeModeBegin(const std::wstring& dir) {
     }
     WriteState(stage, 1);
 
-    // Beta ladder: the experimental touch input is the first thing to go.
+    // After a crash the newest and most invasive part goes first: touch input, then frame upload, then the
+    // game's own GPS UI patch, finally the whole screen.
     Features f;
     f.stage = stage;
     f.touch = stage < 1;

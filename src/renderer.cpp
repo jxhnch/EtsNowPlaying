@@ -5,6 +5,7 @@
 #include "media.h"
 #include "radio_tracker.h"
 #include "settings.h"
+#include "station_logo.h"
 #include "text_util.h"
 #include "touch.h"
 #include "touch_layout.h"
@@ -156,7 +157,7 @@ private:
               DWRITE_PARAGRAPH_ALIGNMENT palign = DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     void Fill(const D2D1_ROUNDED_RECT& r, D2D1_COLOR_F c);
     void Background(D2D1_COLOR_F accent);
-    void SetCover(const CoverBytes& bytes, uint64_t key);
+    void SetCover(const CoverBytes& bytes, uint64_t key, bool isLogo = false);
     void DrawCover(float x, float y, float size);
     void DrawClock();
     void FillTriangle(D2D1_POINT_2F a, D2D1_POINT_2F b, D2D1_POINT_2F c);
@@ -179,6 +180,8 @@ private:
     ComPtr<ID2D1Bitmap> cover_;
     ComPtr<ID2D1Bitmap> bg_;  // blurred, saturated copy of the cover for the background
     uint64_t coverKey_ = ~0ull;
+    bool coverIsLogo_ = false;
+    std::string lastLogoRequest_;
     D2D1_COLOR_F coverColor_ = Rgb(0.11f, 0.73f, 0.33f);
     D2D1_COLOR_F accent_ = Rgb(0.11f, 0.73f, 0.33f);
 
@@ -284,10 +287,11 @@ void Renderer::Background(D2D1_COLOR_F accent) {
 
 // Decodes `bytes` (PNG/JPEG) into the shared cover bitmap and derives an accent colour from it.
 // `key` identifies the picture: nothing happens while it stays the same.
-void Renderer::SetCover(const CoverBytes& bytes, uint64_t key) {
+void Renderer::SetCover(const CoverBytes& bytes, uint64_t key, bool isLogo) {
     if (key == coverKey_) return;
     coverKey_ = key;
     coverSetAt_ = now_;
+    coverIsLogo_ = isLogo;
     cover_.Reset();
     bg_.Reset();
     coverColor_ = Rgb(0.11f, 0.73f, 0.33f);
@@ -318,16 +322,30 @@ void Renderer::SetCover(const CoverBytes& bytes, uint64_t key) {
         SUCCEEDED(scaler->Initialize(conv.Get(), kBgSize, kBgSize, WICBitmapInterpolationModeFant)) &&
         SUCCEEDED(scaler->CopyPixels(nullptr, kBgSize * 4, static_cast<UINT>(px.size()), px.data()))) {
         coverColor_ = VibrantColor(px);
-        Blur(px, kBgSize, kBgSize, 4);
-        Saturate(px, 1.35f);
-        rt_->CreateBitmap(D2D1::SizeU(kBgSize, kBgSize), px.data(), kBgSize * 4,
-                          D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)),
-                          bg_.GetAddressOf());
+        if (!isLogo) {  // a logo only tints the screen, a blurred logo would just be a pale smear
+            Blur(px, kBgSize, kBgSize, 4);
+            Saturate(px, 1.35f);
+            rt_->CreateBitmap(D2D1::SizeU(kBgSize, kBgSize), px.data(), kBgSize * 4,
+                              D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)),
+                              bg_.GetAddressOf());
+        }
     }
 }
 
 void Renderer::DrawCover(float cx, float cy, float cs) {
     Fill(D2D1::RoundedRect(D2D1::RectF(cx + 4, cy + 10, cx + cs + 4, cy + cs + 10), 24, 24), Rgb(0, 0, 0, 0.35f));
+    if (cover_ && coverIsLogo_) {
+        // Station logo: kept in proportion on a light tile, like an app icon.
+        const float fade = CoverFade();
+        Fill(D2D1::RoundedRect(D2D1::RectF(cx, cy, cx + cs, cy + cs), 24, 24), Rgb(0.96f, 0.96f, 0.97f, 0.96f * fade));
+        const float pad = 36.0f;
+        D2D1_SIZE_F sz = cover_->GetSize();
+        float scale = std::min((cs - 2 * pad) / sz.width, (cs - 2 * pad) / sz.height);
+        float w = sz.width * scale, h = sz.height * scale;
+        rt_->DrawBitmap(cover_.Get(), D2D1::RectF(cx + (cs - w) / 2, cy + (cs - h) / 2, cx + (cs + w) / 2, cy + (cs + h) / 2),
+                        fade, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        return;
+    }
     if (cover_) {
         ComPtr<ID2D1BitmapBrush> bb;
         if (SUCCEEDED(rt_->CreateBitmapBrush(cover_.Get(),
@@ -463,21 +481,36 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
     std::wstring artist, song;
     SplitArtistTitle(raw, artist, song);  // without a separator `song` is the whole title
 
-    // Song cover from the iTunes lookup (when the title looks like "Artist - Song").
-    CoverBytes coverBytes;
-    uint64_t coverKey = 0;
+    // Left picture: the song's cover if one was found (title looks like "Artist - Song"), otherwise the station's
+    // logo, otherwise (below) its initials.
+    CoverBytes picture;
+    bool isLogo = false;
+    uint64_t pictureKey = (std::hash<std::string>()(raw) * 31 + 7) | (1ull << 63);
     if (hasSong && !artist.empty() && GetSettings().coverLookup) {
         if (raw != lastCoverRequest_) {
             lastCoverRequest_ = raw;
             CoverLookupRequest(raw);
         }
         CoverResult c = CoverLookupGet(raw);
-        if (c.state == CoverState::Found) coverBytes = c.image;
-        coverKey = (std::hash<std::string>()(raw) * 31 + (c.state == CoverState::Found ? 1 : 0)) | (1ull << 63);
-    } else {
-        coverKey = (std::hash<std::string>()(raw) * 31 + 7) | (1ull << 63);
+        if (c.state == CoverState::Found) {
+            picture = c.image;
+            pictureKey = (std::hash<std::string>()(raw) * 31 + 1) | (1ull << 63);
+        }
     }
-    SetCover(coverBytes, coverKey);
+    if (!picture && GetSettings().coverLookup && !stationUtf8.empty()) {
+        const std::string stationKey = stationUtf8 + "|" + r.stationUrl;
+        if (stationKey != lastLogoRequest_) {
+            lastLogoRequest_ = stationKey;
+            StationLogoRequest(stationUtf8, r.country, r.stationUrl);
+        }
+        LogoResult logo = StationLogoGet(stationUtf8, r.stationUrl);
+        if (logo.state == LogoState::Found) {
+            picture = logo.image;
+            isLogo = true;
+            pictureKey = (std::hash<std::string>()(stationKey) * 31 + 3) | (1ull << 63);
+        }
+    }
+    SetCover(picture, pictureKey, isLogo);
 
     D2D1_COLOR_F target = cover_ ? coverColor_ : Rgb(1.0f, 0.62f, 0.18f);
     accent_.r = Lerp(accent_.r, target.r, 0.12f);
@@ -520,7 +553,8 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
     }
 
     // Right: song and artist big. While the stream has not told us the song yet (many stations only send it
-    // after a few seconds), the station name stands in, with a moving "looking for the track" bar below it.
+    // after a few seconds), the station name stands in, with a moving "looking for the track" bar below it for
+    // the first 5 seconds. After that (or when the station only sends its own name) just the station name stays.
     // New text fades in when it changes.
     const float x0 = 360, w = 400;
     const std::string key = hasSong ? raw : "station:" + stationUtf8;
@@ -536,7 +570,8 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
         Text(artist, x0, 202 + rise, w, 36, 24, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.82f));
     } else {
         Text(ToWide(stationUtf8), x0, 84 + rise, w, 112, 38, DWRITE_FONT_WEIGHT_SEMI_BOLD, Rgb(1, 1, 1), true);
-        if (r.ageMs < 15000) {
+        const bool stationSaidNothing = !raw.empty() && titleIsStation;
+        if (!stationSaidNothing && r.ageMs < 5000) {
             const int dots = static_cast<int>(t * 2.5) % 4;
             Text(std::wstring(L"Looking for the track") + std::wstring(static_cast<size_t>(dots), L'.'), x0, 202, w, 30, 20,
                  DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f));
@@ -548,9 +583,6 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
             Fill(D2D1::RoundedRect(D2D1::RectF(x0 + sweep * w, by, x0 + sweep * w + 120, by + bh), 2, 2),
                  Rgb(accent_.r, accent_.g, accent_.b, 0.85f * textAlpha_));
             rt_->PopAxisAlignedClip();
-        } else {
-            Text(L"This station does not send track titles", x0, 202, w, 30, 18, DWRITE_FONT_WEIGHT_NORMAL,
-                 Rgb(1, 1, 1, 0.45f));
         }
     }
 
