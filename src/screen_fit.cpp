@@ -27,6 +27,8 @@ struct Geometry {
     bool ok = false;
     double uvMin[2] = {0, 0}, uvMax[2] = {1, 1};
     double lenU = 1, lenV = 1;  // physical length of one texture unit along u and v
+    bool orientOk = false;      // orientation worked out from the mesh itself (see OrientationFromSurface)
+    int rightAxis = 0, rightSign = 1, upAxis = 1, upSign = 1;
 };
 
 struct DrawSig {
@@ -166,6 +168,7 @@ struct Vertex {
 struct Surface {
     double uvMin[2], uvMax[2];
     double lenU, lenV;  // physical length of a texture unit along u / v
+    double dU[3], dV[3];  // the same as vectors: how the position changes per unit of u / v
     double error;       // RMS distance of the vertices from the fitted flat surface, relative to its size
 };
 
@@ -197,6 +200,10 @@ bool FitSurface(const std::vector<Vertex>& verts, Surface& s) {
         if (!Solve3(a)) return false;
         for (int c = 0; c < 3; ++c) coef[k][c] = a[c][3];
     }
+    for (int k = 0; k < 3; ++k) {
+        s.dU[k] = coef[k][1];
+        s.dV[k] = coef[k][2];
+    }
     s.lenU = std::sqrt(coef[0][1] * coef[0][1] + coef[1][1] * coef[1][1] + coef[2][1] * coef[2][1]);
     s.lenV = std::sqrt(coef[0][2] * coef[0][2] + coef[1][2] * coef[1][2] + coef[2][2] * coef[2][2]);
     double err = 0;
@@ -219,6 +226,73 @@ bool PlausibleSurface(const Surface& s) {
     if (s.uvMin[0] < -0.05 || s.uvMin[1] < -0.05 || s.uvMax[0] > 1.05 || s.uvMax[1] > 1.05) return false;
     const double aspect = (s.lenU * du) / (s.lenV * dv);
     return aspect > 0.1 && aspect < 10.0;
+}
+
+// Which way does the texture run on the display, seen from the driver's seat? Worked out from the mesh alone:
+// "up" is the world's up direction (+Y in the model) projected into the display plane, the display faces the driver,
+// who sits on the +Z side of the dashboard (SCS models look along -Z), and "right" is then up x normal.
+// Both are expressed in texture directions: which of u / v grows to the right / upwards, and with which sign.
+bool OrientationFromSurface(const Surface& s, int& rightAxis, int& rightSign, int& upAxis, int& upSign) {
+    auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    auto cross = [](const double* a, const double* b, double* o) {
+        o[0] = a[1] * b[2] - a[2] * b[1];
+        o[1] = a[2] * b[0] - a[0] * b[2];
+        o[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    auto normalize = [&](double* v) {
+        double l = std::sqrt(dot(v, v));
+        if (!(l > 1e-12)) return false;
+        for (int k = 0; k < 3; ++k) v[k] /= l;
+        return true;
+    };
+    double n[3];
+    cross(s.dU, s.dV, n);
+    if (!normalize(n)) return false;
+    if (n[2] < 0) {
+        for (double& c : n) c = -c;  // the side that faces the driver
+    }
+    if (std::fabs(n[2]) < 0.15) return false;  // a display that does not face the driver: not sure about "forward"
+    double up[3] = {0, 1, 0};
+    const double along = n[1];
+    for (int k = 0; k < 3; ++k) up[k] -= along * n[k];
+    if (!normalize(up) || std::sqrt(dot(up, up)) < 0.5) return false;
+    // Reject displays lying (almost) flat: "up" along the surface would be ambiguous.
+    if (std::fabs(n[1]) > 0.9) return false;
+    double right[3];
+    cross(up, n, right);
+    if (!normalize(right)) return false;
+
+    // Coordinates of a direction in (u, v): least squares through dU, dV.
+    const double g11 = dot(s.dU, s.dU), g12 = dot(s.dU, s.dV), g22 = dot(s.dV, s.dV);
+    const double det = g11 * g22 - g12 * g12;
+    if (std::fabs(det) < 1e-18) return false;
+    auto toUV = [&](const double* d, double& du, double& dv) {
+        const double a = dot(s.dU, d), b = dot(s.dV, d);
+        du = (g22 * a - g12 * b) / det;
+        dv = (-g12 * a + g11 * b) / det;
+    };
+    double ru, rv, uu, uv;
+    toUV(right, ru, rv);
+    toUV(up, uu, uv);
+    // The texture directions are scaled by the physical size of one texture unit; compare in physical terms.
+    ru *= s.lenU;
+    rv *= s.lenV;
+    uu *= s.lenU;
+    uv *= s.lenV;
+    const bool rightIsU = std::fabs(ru) >= std::fabs(rv), upIsU = std::fabs(uu) >= std::fabs(uv);
+    const double rMain = rightIsU ? ru : rv, rOther = rightIsU ? rv : ru;
+    const double uMain = upIsU ? uu : uv, uOther = upIsU ? uv : uu;
+    if (rightIsU == upIsU || std::fabs(rMain) < 2.0 * std::fabs(rOther) || std::fabs(uMain) < 2.0 * std::fabs(uOther)) {
+        Logf("FIT orientation from the mesh is ambiguous (right = %.2fu %.2fv, up = %.2fu %.2fv)", ru, rv, uu, uv);
+        return false;
+    }
+    rightAxis = rightIsU ? 0 : 1;
+    rightSign = rMain > 0 ? 1 : -1;
+    upAxis = upIsU ? 0 : 1;
+    upSign = uMain > 0 ? 1 : -1;
+    Logf("FIT orientation from the mesh: normal toward the driver (%.2f %.2f %.2f), screen up = (%.2f %.2f %.2f), right = (%.2f %.2f %.2f)",
+         n[0], n[1], n[2], up[0], up[1], up[2], right[0], right[1], right[2]);
+    return true;
 }
 
 // ---- decoding a draw call's vertices -------------------------------------------------------------------------------
@@ -538,6 +612,7 @@ Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT
     }
     g.lenU = s.lenU;
     g.lenV = s.lenV;
+    g.orientOk = OrientationFromSurface(s, g.rightAxis, g.rightSign, g.upAxis, g.upSign);
     return g;
 }
 
@@ -546,8 +621,19 @@ Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT
 // Caller holds g_mx.
 void Recompute() {
     g_fit = ScreenFit{};
-    if (!g_orientStable) return;
-    const ScreenOrientation& o = g_orient;
+    // The orientation comes from the mesh itself; the screen scan (touch.cpp) is only a fallback and is off by default.
+    ScreenOrientation o;
+    if (g_geo.ok && g_geo.orientOk) {
+        o.ok = true;
+        o.rightAxis = g_geo.rightAxis;
+        o.rightSign = g_geo.rightSign;
+        o.upAxis = g_geo.upAxis;
+        o.upSign = g_geo.upSign;
+    } else if (g_orientStable) {
+        o = g_orient;
+    } else {
+        return;
+    }
 
     double umin = 0, vmin = 0, du = 1, dv = 1;
     if (g_geo.ok) {
@@ -597,6 +683,8 @@ void Recompute() {
     inv[3] = m[0] / det;
     inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
     inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
+    // Sanity: the fitted picture must stay inside the texture and be a sensible size.
+    if (!(s > 0) || !std::isfinite(m[0] + m[1] + m[2] + m[3] + m[4] + m[5])) return;
     g_fit.fromGeometry = g_geo.ok;
     g_fit.valid = true;
     Logf("FIT result%s: %s | screen right = texture %c%c, screen up = texture %c%c | canvas->texel [%.3f %.3f %.3f %.3f %.1f %.1f]",
@@ -687,7 +775,10 @@ void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startInd
 }
 
 bool FitNeedsOrientation() {
-    if (!g_enabled) return false;
+    // The coarse screen scan proved unreliable (it also sees reflection and shadow passes), so the orientation is
+    // taken from the mesh. Flip this to true to bring the scan back as a fallback.
+    constexpr bool kUseScreenScan = false;
+    if (!kUseScreenScan || !g_enabled) return false;
     std::lock_guard<std::mutex> lock(g_mx);
     return !g_orientStable;
 }
