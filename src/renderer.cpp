@@ -192,7 +192,10 @@ private:
     std::string lastCoverRequest_;
 
     // Layout canvas (800x480) -> texture pixels: fitted to the real display, or simply filling the texture.
-    D2D1::Matrix3x2F uiTransform_ = D2D1::Matrix3x2F::Identity();
+    D2D1::Matrix3x2F uiTransform_ = D2D1::Matrix3x2F::Identity();    // layout canvas -> texture pixels
+    D2D1::Matrix3x2F drawTransform_ = D2D1::Matrix3x2F::Identity();  // design area (800x480) -> texture pixels
+    float canvasW_ = static_cast<float>(kCanvasWidth);               // size of the layout canvas, follows the display shape
+    float canvasH_ = static_cast<float>(kCanvasHeight);
     bool fitActive_ = false;
 
     // Soft transitions: new covers and new titles fade in instead of popping.
@@ -265,7 +268,7 @@ void Renderer::Background(D2D1_COLOR_F accent) {
     // The background covers the whole texture, so it is drawn without the layout transform.
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
     BackgroundFill(accent);
-    rt_->SetTransform(uiTransform_);
+    rt_->SetTransform(drawTransform_);
 }
 
 void Renderer::BackgroundFill(D2D1_COLOR_F accent) {
@@ -379,7 +382,7 @@ void Renderer::DrawCover(float cx, float cy, float cs) {
 }
 
 void Renderer::DrawClock() {
-    Text(Clock(), kCanvasWidth - 140, 22, 100, 28, 20, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f), false,
+    Text(Clock(), canvasW_ - 140, 22, 100, 28, 20, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f), false,
          DWRITE_TEXT_ALIGNMENT_TRAILING);
 }
 
@@ -399,7 +402,7 @@ void Renderer::DrawMedia(const MediaSnapshot& m, double t) {
 
     DrawCover(40, 80, 280);
 
-    const float x0 = 360, w = 400;
+    const float x0 = 360, w = canvasW_ - x0 - 40;  // the text column takes the width of the display
     Text(ToWide(m.title), x0, 84, w, 112, 38, DWRITE_FONT_WEIGHT_SEMI_BOLD, Rgb(1, 1, 1), true);
     Text(ToWide(m.artist), x0, 202, w, 36, 24, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.82f));
     Text(ToWide(m.album), x0, 240, w, 28, 18, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.5f));
@@ -569,7 +572,7 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
     // after a few seconds), the station name stands in, with a moving "looking for the track" bar below it for
     // the first 5 seconds. After that (or when the station only sends its own name) just the station name stays.
     // New text fades in when it changes.
-    const float x0 = 360, w = 400;
+    const float x0 = 360, w = canvasW_ - x0 - 40;  // the text column takes the width of the display
     const std::string key = hasSong ? raw : "station:" + stationUtf8;
     if (key != titleKey_) {
         titleKey_ = key;
@@ -628,9 +631,9 @@ void Renderer::DrawIdle(double t) {
     accent_.g = Lerp(accent_.g, target.g, 0.12f);
     accent_.b = Lerp(accent_.b, target.b, 0.12f);
     Background(accent_);
-    Text(Clock(), 0, 120, kCanvasWidth, 150, 120, DWRITE_FONT_WEIGHT_LIGHT, Rgb(1, 1, 1, 0.92f), false,
+    Text(Clock(), 0, 120, canvasW_, 150, 120, DWRITE_FONT_WEIGHT_LIGHT, Rgb(1, 1, 1, 0.92f), false,
          DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    Text(L"Nothing playing", 0, 290, kCanvasWidth, 36, 22, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.45f), false,
+    Text(L"Nothing playing", 0, 290, canvasW_, 36, 22, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.45f), false,
          DWRITE_TEXT_ALIGNMENT_CENTER);
     (void)t;
 }
@@ -669,6 +672,8 @@ void Renderer::Frame(double t) {
     rt_->BeginDraw();
     const ScreenFit fit = FitGet();
     fitActive_ = fit.valid;
+    canvasW_ = fit.valid ? static_cast<float>(fit.canvasW) : static_cast<float>(kCanvasWidth);
+    canvasH_ = fit.valid ? static_cast<float>(fit.canvasH) : static_cast<float>(kCanvasHeight);
     if (fit.valid) {
         const double* m = fit.canvasToTexel;
         uiTransform_ = D2D1::Matrix3x2F(static_cast<float>(m[0]), static_cast<float>(m[1]), static_cast<float>(m[2]),
@@ -677,7 +682,9 @@ void Renderer::Frame(double t) {
         uiTransform_ = D2D1::Matrix3x2F::Scale(static_cast<float>(kScreenWidth) / kCanvasWidth,
                                                static_cast<float>(kScreenHeight) / kCanvasHeight);
     }
-    rt_->SetTransform(uiTransform_);
+    // The 800x480 design area sits in the middle of a taller canvas; a wider canvas simply gets wider text.
+    drawTransform_ = D2D1::Matrix3x2F::Translation(0, fit.valid ? static_cast<float>(fit.designOffsetY) : 0.0f) * uiTransform_;
+    rt_->SetTransform(drawTransform_);
     bool buttons = false;
     if (radio.active) DrawRadio(radio, t);
     else if (holdRadio) DrawRadio(lastRadio_, t);

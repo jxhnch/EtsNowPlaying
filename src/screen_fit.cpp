@@ -46,10 +46,11 @@ Geometry g_geo;
 std::vector<DrawSig> g_seen;  // draw calls already looked at since the screen appeared
 int g_attempts = 0;
 ULONGLONG g_resetTick = 0;
-ScreenOrientation g_orient;      // accepted orientation
-ScreenOrientation g_lastOrient;  // last measurement, accepted after three equal ones
-int g_orientVotes = 0;
-bool g_orientStable = false;
+ScanWindow g_scanLast;  // last measurement of the visible texture window
+int g_scanVotes = 0;
+bool g_scanStable = false;  // three equal measurements in a row
+ScanWindow g_scan;          // the accepted window
+double g_bestArea = 0;      // physical area of the best display mesh found so far
 ScreenFit g_fit;
 
 // ---- vertex formats -------------------------------------------------------------------------------------------
@@ -621,39 +622,49 @@ Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT
 // Caller holds g_mx.
 void Recompute() {
     g_fit = ScreenFit{};
-    // The orientation comes from the mesh itself; the screen scan (touch.cpp) is only a fallback and is off by default.
+    if (!g_geo.ok || !g_geo.orientOk) return;  // without the mesh we know neither shape nor orientation: plain mapping
     ScreenOrientation o;
-    if (g_geo.ok && g_geo.orientOk) {
-        o.ok = true;
-        o.rightAxis = g_geo.rightAxis;
-        o.rightSign = g_geo.rightSign;
-        o.upAxis = g_geo.upAxis;
-        o.upSign = g_geo.upSign;
-    } else if (g_orientStable) {
-        o = g_orient;
-    } else {
-        return;
-    }
+    o.ok = true;
+    o.rightAxis = g_geo.rightAxis;
+    o.rightSign = g_geo.rightSign;
+    o.upAxis = g_geo.upAxis;
+    o.upSign = g_geo.upSign;
 
-    double umin = 0, vmin = 0, du = 1, dv = 1;
-    if (g_geo.ok) {
-        umin = g_geo.uvMin[0];
-        vmin = g_geo.uvMin[1];
-        du = g_geo.uvMax[0] - umin;
-        dv = g_geo.uvMax[1] - vmin;
+    // Part of the texture that is visible. The mesh says so, unless the game's shader remaps the coordinates:
+    // then the scan of the real screen (which sees the result) disagrees, and it wins.
+    const double meshU0 = g_geo.uvMin[0], meshV0 = g_geo.uvMin[1];
+    const double meshDu = g_geo.uvMax[0] - meshU0, meshDv = g_geo.uvMax[1] - meshV0;
+    double umin = meshU0, vmin = meshV0, du = meshDu, dv = meshDv;
+    bool measured = false;
+    if (g_scanStable) {
+        const double tol = 0.04;
+        if (std::fabs(g_scan.uMin - meshU0) > tol || std::fabs(g_scan.uMax - (meshU0 + meshDu)) > tol ||
+            std::fabs(g_scan.vMin - meshV0) > tol || std::fabs(g_scan.vMax - (meshV0 + meshDv)) > tol) {
+            umin = g_scan.uMin;
+            vmin = g_scan.vMin;
+            du = g_scan.uMax - g_scan.uMin;
+            dv = g_scan.vMax - g_scan.vMin;
+            measured = true;
+        }
     }
-    // Physical width (along the screen's right direction) and height (along up) of the visible part.
-    const double pu = g_geo.ok ? g_geo.lenU * du : 1.0, pv = g_geo.ok ? g_geo.lenV * dv : 1.0;
-    double W = o.rightAxis == 0 ? pu : pv, H = o.upAxis == 0 ? pu : pv;
-    if (!g_geo.ok) {  // shape unknown: let the picture fill the visible area
-        W = kCanvasWidth;
-        H = kCanvasHeight;
-    }
-    const double s = std::min(W / kCanvasWidth, H / kCanvasHeight);  // physical units per canvas unit
+    if (!(du > 0.02 && dv > 0.02)) return;
+
+    // Physical width (along the screen's right direction) and height (along up) of the display: that is the mesh.
+    const double pu = g_geo.lenU * meshDu, pv = g_geo.lenV * meshDv;
+    const double W = o.rightAxis == 0 ? pu : pv, H = o.upAxis == 0 ? pu : pv;
+    if (!(W > 0 && H > 0)) return;
+
+    // The layout canvas gets the shape of the display: wider display, wider canvas (the text column grows);
+    // taller display, taller canvas (the layout stays centred vertically). It then fills the display completely.
+    const double aspect = W / H, designAspect = static_cast<double>(kCanvasWidth) / kCanvasHeight;
+    double cw = kCanvasWidth, ch = kCanvasHeight;
+    if (aspect >= designAspect) cw = std::min(kCanvasHeight * aspect, 1400.0);
+    else ch = std::min(kCanvasWidth / aspect, 1100.0);
+    const double s = std::min(W / cw, H / ch);  // physical units per canvas unit
 
     auto toTexel = [&](double cx, double cy, double& tx, double& ty) {
-        double tr = 0.5 + (cx - kCanvasWidth / 2.0) * s / W;   // 0..1 along the screen's right direction
-        double tu = 0.5 - (cy - kCanvasHeight / 2.0) * s / H;  // 0..1 along its up direction
+        double tr = 0.5 + (cx - cw / 2.0) * s / W;   // 0..1 along the screen's right direction
+        double tu = 0.5 - (cy - ch / 2.0) * s / H;   // 0..1 along its up direction
         if (o.rightSign < 0) tr = 1.0 - tr;
         if (o.upSign < 0) tu = 1.0 - tu;
         double uv[2];
@@ -665,17 +676,17 @@ void Recompute() {
     };
     double x0, y0, x1, y1, x2, y2;
     toTexel(0, 0, x0, y0);
-    toTexel(kCanvasWidth, 0, x1, y1);
-    toTexel(0, kCanvasHeight, x2, y2);
+    toTexel(cw, 0, x1, y1);
+    toTexel(0, ch, x2, y2);
     double* m = g_fit.canvasToTexel;
-    m[0] = (x1 - x0) / kCanvasWidth;   // a
-    m[1] = (y1 - y0) / kCanvasWidth;   // b
-    m[2] = (x2 - x0) / kCanvasHeight;  // c
-    m[3] = (y2 - y0) / kCanvasHeight;  // d
-    m[4] = x0;                         // e
-    m[5] = y0;                         // f
+    m[0] = (x1 - x0) / cw;  // a
+    m[1] = (y1 - y0) / cw;  // b
+    m[2] = (x2 - x0) / ch;  // c
+    m[3] = (y2 - y0) / ch;  // d
+    m[4] = x0;              // e
+    m[5] = y0;              // f
     const double det = m[0] * m[3] - m[1] * m[2];
-    if (std::fabs(det) < 1e-9) return;
+    if (std::fabs(det) < 1e-9 || !std::isfinite(m[0] + m[1] + m[2] + m[3] + m[4] + m[5])) return;
     double* inv = g_fit.texelToCanvas;
     inv[0] = m[3] / det;
     inv[1] = -m[1] / det;
@@ -683,15 +694,16 @@ void Recompute() {
     inv[3] = m[0] / det;
     inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
     inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
-    // Sanity: the fitted picture must stay inside the texture and be a sensible size.
-    if (!(s > 0) || !std::isfinite(m[0] + m[1] + m[2] + m[3] + m[4] + m[5])) return;
-    g_fit.fromGeometry = g_geo.ok;
+    g_fit.canvasW = cw;
+    g_fit.canvasH = ch;
+    g_fit.designOffsetY = (ch - kCanvasHeight) / 2.0;
+    g_fit.fromGeometry = true;
     g_fit.valid = true;
-    Logf("FIT result%s: %s | screen right = texture %c%c, screen up = texture %c%c | canvas->texel [%.3f %.3f %.3f %.3f %.1f %.1f]",
-         g_mode == 2 ? " (would be applied, measure-only mode)" : "",
-         g_geo.ok ? "real display shape" : "orientation only (picture fills the display)", o.rightSign > 0 ? '+' : '-',
-         o.rightAxis == 0 ? 'u' : 'v', o.upSign > 0 ? '+' : '-', o.upAxis == 0 ? 'u' : 'v', m[0], m[1], m[2], m[3], m[4],
-         m[5]);
+    Logf("FIT result%s: display %.4f x %.4f (aspect %.3f) -> layout canvas %.0f x %.0f | texture window u %.3f..%.3f v %.3f..%.3f%s | "
+         "right = texture %c%c, up = texture %c%c",
+         g_mode == 2 ? " (would be applied, measure-only mode)" : "", W, H, aspect, cw, ch, umin, umin + du, vmin, vmin + dv,
+         measured ? " (MEASURED on screen, differs from the mesh)" : " (as in the mesh)", o.rightSign > 0 ? '+' : '-',
+         o.rightAxis == 0 ? 'u' : 'v', o.upSign > 0 ? '+' : '-', o.upAxis == 0 ? 'u' : 'v');
 }
 
 }  // namespace
@@ -711,10 +723,11 @@ void FitReset(const char* reason) {
     g_attempts = 0;
     g_resetTick = GetTickCount64();
     g_geo = Geometry{};
-    g_orient = ScreenOrientation{};
-    g_lastOrient = ScreenOrientation{};
-    g_orientVotes = 0;
-    g_orientStable = false;
+    g_bestArea = 0;
+    g_scanLast = ScanWindow{};
+    g_scanVotes = 0;
+    g_scanStable = false;
+    g_scan = ScanWindow{};
     g_fit = ScreenFit{};
     Logf("FIT reset (%s)", reason);
 }
@@ -740,9 +753,9 @@ void FitOnCreateInputLayout(ID3D11InputLayout* layout, const D3D11_INPUT_ELEMENT
 bool FitNeedsGeometry() {
     if (!g_enabled) return false;
     std::lock_guard<std::mutex> lock(g_mx);
-    // A screen can be made of several draw calls (screen, frame, ...): look at up to six different ones, for the
-    // first 20 seconds, until one of them turns out to be the flat display.
-    return !g_geo.ok && g_attempts < 6 && GetTickCount64() - g_resetTick < 20000;
+    // A screen can be made of several draw calls (screen, glass, frame ...): look at up to six different ones during
+    // the first 20 seconds and keep the largest flat display among them.
+    return g_attempts < 6 && GetTickCount64() - g_resetTick < 20000;
 }
 
 void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT baseVertex) {
@@ -768,32 +781,34 @@ void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startInd
     Logf("FIT looking at draw call %d: %u indices from %u, base vertex %d", g_attempts, indexCount, startIndex, baseVertex);
     Geometry g = Analyze(ctx, indexCount, startIndex, baseVertex);
     std::lock_guard<std::mutex> lock(g_mx);
-    if (g.ok && !g_geo.ok) {
+    if (!g.ok) return;
+    const double area = (g.lenU * (g.uvMax[0] - g.uvMin[0])) * (g.lenV * (g.uvMax[1] - g.uvMin[1]));
+    if (area > g_bestArea) {  // the display is the biggest flat surface that carries our texture
+        g_bestArea = area;
         g_geo = g;
         Recompute();
     }
 }
 
-bool FitNeedsOrientation() {
-    // The coarse screen scan proved unreliable (it also sees reflection and shadow passes), so the orientation is
-    // taken from the mesh. Flip this to true to bring the scan back as a fallback.
-    constexpr bool kUseScreenScan = false;
-    if (!kUseScreenScan || !g_enabled) return false;
+bool FitNeedsScan() {
+    if (!g_enabled) return false;
     std::lock_guard<std::mutex> lock(g_mx);
-    return !g_orientStable;
+    return g_geo.ok && !g_scanStable && GetTickCount64() - g_resetTick < 90000;
 }
 
-void FitNoteOrientation(const ScreenOrientation& o) {
-    if (!g_enabled || !o.ok) return;
+void FitNoteScanWindow(const ScanWindow& w) {
+    if (!g_enabled || !w.ok) return;
     std::lock_guard<std::mutex> lock(g_mx);
-    if (g_orientStable) return;
-    bool same = g_lastOrient.ok && g_lastOrient.rightAxis == o.rightAxis && g_lastOrient.rightSign == o.rightSign &&
-                g_lastOrient.upAxis == o.upAxis && g_lastOrient.upSign == o.upSign;
-    g_orientVotes = same ? g_orientVotes + 1 : 1;
-    g_lastOrient = o;
-    if (g_orientVotes >= 3) {  // the same answer three times in a row
-        g_orient = o;
-        g_orientStable = true;
+    if (g_scanStable) return;
+    const double tol = 0.02;
+    bool same = g_scanLast.ok && std::fabs(g_scanLast.uMin - w.uMin) < tol && std::fabs(g_scanLast.uMax - w.uMax) < tol &&
+                std::fabs(g_scanLast.vMin - w.vMin) < tol && std::fabs(g_scanLast.vMax - w.vMax) < tol;
+    g_scanVotes = same ? g_scanVotes + 1 : 1;
+    g_scanLast = w;
+    if (g_scanVotes >= 3) {  // the same window three times in a row
+        g_scan = w;
+        g_scanStable = true;
+        Logf("FIT visible texture window measured on screen: u %.3f..%.3f, v %.3f..%.3f", w.uMin, w.uMax, w.vMin, w.vMax);
         Recompute();
     }
 }

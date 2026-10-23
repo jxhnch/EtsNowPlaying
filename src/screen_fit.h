@@ -21,6 +21,16 @@ struct ScreenFit {
     double canvasToTexel[6] = {};
     double texelToCanvas[6] = {};
     bool fromGeometry = false;  // false: orientation known but the real shape not, the picture fills the visible area
+    // The layout adapts to the shape of the display: a canvas that is as wide / tall as the display needs.
+    // The design area (800x480 units, where the buttons are) sits at x = 0, y = designOffsetY inside it.
+    double canvasW = 800, canvasH = 480;
+    double designOffsetY = 0;
+};
+
+// The part of the texture that is really visible on screen, measured by the coarse screen scan (touch.cpp).
+struct ScanWindow {
+    bool ok = false;
+    double uMin = 0, uMax = 1, vMin = 0, vMax = 1;
 };
 
 struct ScreenOrientation {
@@ -42,8 +52,9 @@ bool FitNeedsGeometry();
 // Called from the draw hook for a draw call that shows our screen texture.
 void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT baseVertex);
 
-bool FitNeedsOrientation();
-void FitNoteOrientation(const ScreenOrientation& o);
+// The scan only runs until it has measured the visible texture window (a few seconds after the screen appears).
+bool FitNeedsScan();
+void FitNoteScanWindow(const ScanWindow& w);
 
 ScreenFit FitGet();
 

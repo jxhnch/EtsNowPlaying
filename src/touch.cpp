@@ -19,7 +19,7 @@ namespace {
 
 constexpr int kProbeW = 512, kProbeH = 256;  // probe texture: texel (i,j) holds ((i+.5)/W, (j+.5)/H, 1, 1)
 constexpr int kRing = 4;
-constexpr int kScanW = 128, kScanH = 96;  // coarse picture of the whole view: texture coordinates of the screen
+constexpr int kScanW = 384, kScanH = 216;  // picture of the whole view: texture coordinates of the screen
 constexpr int kScanRing = 3;
 
 PsSetSrvFn g_psSet = nullptr;
@@ -44,6 +44,8 @@ ID3D11Texture2D* g_scanStaging[kScanRing] = {};
 bool g_scanPending[kScanRing] = {};
 int g_scanIndex = 0;
 bool g_scanDrawnThisFrame = false;
+bool g_scanFrameActive = false;  // a scan picture is being built this frame (it may take several draw calls)
+int g_scanDraws = 0;
 ULONGLONG g_lastScanTick = 0;
 int g_scanLogged = 0;
 
@@ -198,7 +200,8 @@ void DecodeResult(const float* px) {
     if (fit.valid) {  // texture coordinate -> texel -> layout canvas, through the inverse of the fit transform
         const double tx = u * kScreenWidth, ty = v * kScreenHeight;
         g_state.x = static_cast<float>(fit.texelToCanvas[0] * tx + fit.texelToCanvas[2] * ty + fit.texelToCanvas[4]);
-        g_state.y = static_cast<float>(fit.texelToCanvas[1] * tx + fit.texelToCanvas[3] * ty + fit.texelToCanvas[5]);
+        // The buttons live in the 800x480 design area, which sits at designOffsetY inside the (taller) canvas.
+        g_state.y = static_cast<float>(fit.texelToCanvas[1] * tx + fit.texelToCanvas[3] * ty + fit.texelToCanvas[5] - fit.designOffsetY);
     } else {
         g_state.x = u * kCanvasWidth;
         g_state.y = (GetSettings().flipVertical ? 1.0f - v : v) * kCanvasHeight;
@@ -244,53 +247,20 @@ void DecodeScan(const float* px, UINT rowPitchFloats) {
     }
     std::sort(us.begin(), us.end());
     std::sort(vs.begin(), vs.end());
-    const double uLo = us[us.size() / 20], uHi = us[us.size() - 1 - us.size() / 20];
-    const double vLo = vs[vs.size() / 20], vHi = vs[vs.size() - 1 - vs.size() / 20];
-    auto centroid = [&](bool useU, bool high, double& cx, double& cy) {
-        double sumX = 0, sumY = 0, count = 0;
-        const double lo = useU ? uLo : vLo, hi = useU ? uHi : vHi, cut = (hi - lo) * 0.3;
-        for (const Cell& c : cells) {
-            const double value = useU ? c.u : c.v;
-            if (high ? value >= hi - cut : value <= lo + cut) {
-                sumX += c.x;
-                sumY += c.y;
-                count += 1;
-            }
-        }
-        cx = count > 0 ? sumX / count : 0;
-        cy = count > 0 ? sumY / count : 0;
-        return count >= 8;
-    };
-    double ux1, uy1, ux0, uy0, vx1, vy1, vx0, vy0;
-    if (!(uHi - uLo > 0.05 && vHi - vLo > 0.05) || !centroid(true, true, ux1, uy1) || !centroid(true, false, ux0, uy0) ||
-        !centroid(false, true, vx1, vy1) || !centroid(false, false, vx0, vy0)) {
-        if (g_scanLogged < 12) {
-            ++g_scanLogged;
-            Logf("FIT scan: %zu cells but the texture coordinates barely change (u %.3f..%.3f, v %.3f..%.3f)", cells.size(), uLo,
-                 uHi, vLo, vHi);
-        }
-        return;
-    }
-    // Moving towards higher u (or v) moves the cells by (dx,dy) on the screen (x right, y down).
-    const double dxU = ux1 - ux0, dyU = uy1 - uy0, dxV = vx1 - vx0, dyV = vy1 - vy0;
-    // Going right on the screen: which of u / v grows, and with which sign? Going up is -y.
-    const bool rightIsU = std::fabs(dxU) >= std::fabs(dxV), upIsU = std::fabs(dyU) >= std::fabs(dyV);
-    const double rightMain = rightIsU ? dxU : dxV, rightOther = rightIsU ? dxV : dxU;
-    const double upMain = upIsU ? -dyU : -dyV, upOther = upIsU ? -dyV : -dyU;
-    const bool clear = std::fabs(rightMain) > 2.0 * std::fabs(rightOther) && std::fabs(upMain) > 2.0 * std::fabs(upOther) &&
-                       rightIsU != upIsU;
+    // The visible part of the texture is what the cells show, apart from a few stray cells at the edges.
+    const size_t trim = std::max<size_t>(1, us.size() * 3 / 1000);
+    ScanWindow w;
+    w.uMin = us[trim];
+    w.uMax = us[us.size() - 1 - trim];
+    w.vMin = vs[trim];
+    w.vMax = vs[vs.size() - 1 - trim];
+    w.ok = cells.size() >= 150 && w.uMax - w.uMin > 0.02 && w.vMax - w.vMin > 0.02;
     if (g_scanLogged < 12) {
         ++g_scanLogged;
-        Logf("FIT scan: %zu cells; higher u moves by (%.1f,%.1f) cells on screen, higher v by (%.1f,%.1f) -> %s", cells.size(), dxU,
-             dyU, dxV, dyV, clear ? "clear" : "ambiguous, ignored");
+        Logf("FIT scan: %zu cells show texture window u %.3f..%.3f, v %.3f..%.3f%s", cells.size(), w.uMin, w.uMax, w.vMin, w.vMax,
+             w.ok ? "" : " (too few cells or too small, ignored)");
     }
-    if (!clear) return;
-    o.ok = true;
-    o.rightAxis = rightIsU ? 0 : 1;
-    o.rightSign = rightMain > 0 ? 1 : -1;
-    o.upAxis = upIsU ? 0 : 1;
-    o.upSign = upMain > 0 ? 1 : -1;
-    FitNoteOrientation(o);
+    if (w.ok) FitNoteScanWindow(w);
 }
 
 void ReadScanBack(ID3D11DeviceContext* ctx) {
@@ -371,7 +341,10 @@ void TouchNoteBind(ID3D11DeviceContext* ctx, UINT start, UINT count, const bool*
 namespace {
 bool WantsPixelProbe() { return g_enabled && g_cursor.inside; }
 bool WantsScan() {
-    return FitEnabled() && !g_scanDrawnThisFrame && GetTickCount64() - g_lastScanTick > 250 && FitNeedsOrientation();
+    // One scan picture every quarter second. The screen may be several draw calls: all of them go into the picture.
+    if (!FitEnabled() || !FitNeedsScan()) return false;
+    if (g_scanFrameActive) return g_scanDraws < 6;
+    return GetTickCount64() - g_lastScanTick > 250;
 }
 }  // namespace
 
@@ -454,7 +427,9 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
         }
     }
 
-    if (nvp > 0 && rtW > 0 && rtH > 0) {
+    // Only the main view: reflection, shadow and cube-map passes draw the screen into small targets too.
+    const bool mainPass = g_cursor.w <= 1 || (rtW >= 0.4f * g_cursor.w && rtH >= 0.4f * g_cursor.h);
+    if (nvp > 0 && rtW > 0 && rtH > 0 && mainPass) {
         t_replaying = true;
         const FLOAT zero[4] = {0, 0, 0, 0};
         ctx->OMSetBlendState(g_noBlend, nullptr, 0xFFFFFFFF);
@@ -486,8 +461,13 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
             if (g_replays == 1) Logf("TOUCH first probe draw (cursor pixel %.0f,%.0f in a %.0fx%.0f target)", px, py, rtW, rtH);
         }
         if (doScan) {
-            // The whole view squeezed into a small target: every pixel of the screen shows its texture coordinates.
-            ctx->ClearRenderTargetView(g_scanRtv, zero);
+            // The whole view squeezed into a smaller target: every pixel of the screen shows its texture coordinates.
+            if (!g_scanFrameActive) {
+                ctx->ClearRenderTargetView(g_scanRtv, zero);
+                g_scanFrameActive = true;
+                g_scanDraws = 0;
+                g_lastScanTick = GetTickCount64();
+            }
             ctx->OMSetRenderTargets(1, &g_scanRtv, nullptr);
             D3D11_VIEWPORT vp = vps[0];
             vp.TopLeftX = 0;
@@ -499,7 +479,7 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
             ctx->RSSetScissorRects(1, &sc);
             drawOnce();
             g_scanDrawnThisFrame = true;
-            g_lastScanTick = GetTickCount64();
+            ++g_scanDraws;
         }
 
         for (int i = 0; i < nSlots; ++i) g_psSet(ctx, slots[i], 1, &g_ours);
@@ -575,6 +555,8 @@ void TouchOnPresent(IDXGISwapChain* sc) {
     g_replayedThisFrame = false;
     g_clearedThisFrame = false;
     g_scanDrawnThisFrame = false;
+    g_scanFrameActive = false;
+    g_scanDraws = 0;
 
     // A short status line every 10 s while the screen is in use, so a report shows what the plugin saw.
     if (g_replays > 0 && GetTickCount64() - g_lastStats > 10000) {
