@@ -3,6 +3,8 @@
 
 #include <d3d11.h>
 
+#include <vector>
+
 namespace ep {
 
 // Fits the picture onto the real display of whatever truck is driven, without any per-truck list.
@@ -31,7 +33,22 @@ struct ScreenFit {
 struct ScanWindow {
     bool ok = false;
     double uMin = 0, uMax = 1, vMin = 0, vMax = 1;
+    // True shape of that window as the camera sees it (perspective removed): length along u divided by length along v.
+    bool shapeOk = false;
+    double uvAspect = 1;
 };
+
+// One covered cell of the screen scan: position in the image plane (units of half the view height, y up) and the
+// texture coordinates found there.
+struct ShapeCell {
+    double x, y, u, v;
+};
+
+// Works out the real proportions of the visible window from the way the screen is projected: a homography from texture
+// coordinates to the image plane, then the aspect ratio of the rectangle (the focal length is estimated from the
+// rectangle itself, with a plausible default when the view is too frontal for that). Independent of any mesh scale.
+bool FitEstimateShape(const std::vector<ShapeCell>& cells, const ScanWindow& window, double& uvAspect, double& focal, bool& focalMeasured,
+                      double& residualCells);
 
 struct ScreenOrientation {
     bool ok = false;

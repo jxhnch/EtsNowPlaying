@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "renderer.h"
+#include "touch.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +37,7 @@ struct DrawSig {
     void* ib;
     UINT count, start;
     INT base;
+    ULONGLONG lastSeen;
 };
 
 std::mutex g_mx;
@@ -50,6 +52,10 @@ ScanWindow g_scanLast;  // last measurement of the visible texture window
 int g_scanVotes = 0;
 bool g_scanStable = false;  // three equal measurements in a row
 ScanWindow g_scan;          // the accepted window
+int g_scanNotes = 0;        // measurements received since the screen appeared
+std::vector<double> g_shapeSamples;  // measured uv aspect of the window, one per scan picture
+bool g_shapeOk = false;     // a consistent measurement exists
+double g_shapeAspect = 1;
 double g_bestArea = 0;      // physical area of the best display mesh found so far
 ScreenFit g_fit;
 
@@ -650,9 +656,23 @@ void Recompute() {
     if (!(du > 0.02 && dv > 0.02)) return;
 
     // Physical width (along the screen's right direction) and height (along up) of the display: that is the mesh.
-    const double pu = g_geo.lenU * meshDu, pv = g_geo.lenV * meshDv;
-    const double W = o.rightAxis == 0 ? pu : pv, H = o.upAxis == 0 ? pu : pv;
+    const double pu = g_geo.lenU * du, pv = g_geo.lenV * dv;
+    double W = o.rightAxis == 0 ? pu : pv, H = o.upAxis == 0 ? pu : pv;
     if (!(W > 0 && H > 0)) return;
+    // The mesh can be wrong about the proportions (scaled model parts), what the camera sees cannot: if the measured
+    // proportions of the visible window disagree clearly, they win.
+    const double meshAspect = W / H;
+    double measuredAspect = 0;
+    bool shapeMeasured = false;
+    if (g_shapeOk) {
+        measuredAspect = o.rightAxis == 0 ? g_shapeAspect : 1.0 / g_shapeAspect;
+        const double ratio = measuredAspect / meshAspect;
+        if (ratio < 0.87 || ratio > 1.15) {
+            W = measuredAspect;
+            H = 1.0;
+            shapeMeasured = true;
+        }
+    }
 
     // The layout canvas gets the shape of the display: wider display, wider canvas (the text column grows);
     // taller display, taller canvas (the layout stays centred vertically). It then fills the display completely.
@@ -699,14 +719,129 @@ void Recompute() {
     g_fit.designOffsetY = (ch - kCanvasHeight) / 2.0;
     g_fit.fromGeometry = true;
     g_fit.valid = true;
-    Logf("FIT result%s: display %.4f x %.4f (aspect %.3f) -> layout canvas %.0f x %.0f | texture window u %.3f..%.3f v %.3f..%.3f%s | "
-         "right = texture %c%c, up = texture %c%c",
-         g_mode == 2 ? " (would be applied, measure-only mode)" : "", W, H, aspect, cw, ch, umin, umin + du, vmin, vmin + dv,
+    Logf("FIT result%s: display aspect %.3f (%s; mesh says %.3f, camera measurement %s) -> layout canvas %.0f x %.0f | texture window "
+         "u %.3f..%.3f v %.3f..%.3f%s | right = texture %c%c, up = texture %c%c",
+         g_mode == 2 ? " (would be applied, measure-only mode)" : "", aspect, shapeMeasured ? "MEASURED by the camera" : "as in the mesh",
+         meshAspect, g_shapeOk ? std::to_string(measuredAspect).substr(0, 5).c_str() : "none", cw, ch, umin, umin + du, vmin, vmin + dv,
          measured ? " (MEASURED on screen, differs from the mesh)" : " (as in the mesh)", o.rightSign > 0 ? '+' : '-',
          o.rightAxis == 0 ? 'u' : 'v', o.upSign > 0 ? '+' : '-', o.upAxis == 0 ? 'u' : 'v');
 }
 
+// Caller holds g_mx.
+void ResetLocked(const char* reason) {
+    g_seen.clear();
+    g_attempts = 0;
+    g_resetTick = GetTickCount64();
+    g_geo = Geometry{};
+    g_bestArea = 0;
+    g_scanLast = ScanWindow{};
+    g_scanVotes = 0;
+    g_scanNotes = 0;
+    g_scanStable = false;
+    g_scan = ScanWindow{};
+    g_shapeSamples.clear();
+    g_shapeOk = false;
+    g_shapeAspect = 1;
+    g_fit = ScreenFit{};
+    Logf("FIT reset (%s)", reason);
+}
+
 }  // namespace
+
+bool FitEstimateShape(const std::vector<ShapeCell>& cells, const ScanWindow& w, double& uvAspect, double& focal, bool& focalMeasured,
+                      double& residualCells) {
+    if (cells.size() < 150) return false;
+    // Least-squares homography (u,v) -> (x,y): x*(h7 u + h8 v + 1) = h1 u + h2 v + h3, same for y.
+    double N[8][9] = {};
+    auto accumulate = [&](const double (&row)[8], double rhs) {
+        for (int i = 0; i < 8; ++i) {
+            for (int j = 0; j < 8; ++j) N[i][j] += row[i] * row[j];
+            N[i][8] += row[i] * rhs;
+        }
+    };
+    for (const ShapeCell& c : cells) {
+        const double r1[8] = {c.u, c.v, 1, 0, 0, 0, -c.u * c.x, -c.v * c.x};
+        const double r2[8] = {0, 0, 0, c.u, c.v, 1, -c.u * c.y, -c.v * c.y};
+        accumulate(r1, c.x);
+        accumulate(r2, c.y);
+    }
+    for (int col = 0; col < 8; ++col) {  // Gaussian elimination with partial pivoting
+        int piv = col;
+        for (int r = col + 1; r < 8; ++r) {
+            if (std::fabs(N[r][col]) > std::fabs(N[piv][col])) piv = r;
+        }
+        if (std::fabs(N[piv][col]) < 1e-12) return false;
+        if (piv != col) {
+            for (int j = 0; j < 9; ++j) std::swap(N[piv][j], N[col][j]);
+        }
+        for (int r = 0; r < 8; ++r) {
+            if (r == col) continue;
+            const double f = N[r][col] / N[col][col];
+            for (int j = col; j < 9; ++j) N[r][j] -= f * N[col][j];
+        }
+    }
+    double h[8];
+    for (int i = 0; i < 8; ++i) h[i] = N[i][8] / N[i][i];
+    auto project = [&](double u, double v, double& x, double& y, double& wgt) {
+        wgt = h[6] * u + h[7] * v + 1.0;
+        x = (h[0] * u + h[1] * v + h[2]) / wgt;
+        y = (h[3] * u + h[4] * v + h[5]) / wgt;
+    };
+    // How well does one projected rectangle explain the scan? (one scan cell is 2/216 of the view height)
+    double sum = 0;
+    for (const ShapeCell& c : cells) {
+        double x, y, wg;
+        project(c.u, c.v, x, y, wg);
+        if (!std::isfinite(x + y)) return false;
+        sum += (x - c.x) * (x - c.x) + (y - c.y) * (y - c.y);
+    }
+    residualCells = std::sqrt(sum / cells.size()) / (2.0 / 216.0);
+    if (!(residualCells < 1.0)) return false;
+
+    // The four corners of the visible window, as image points (x, y, 1).
+    struct V3 {
+        double x, y, z;
+    };
+    auto cross = [](const V3& a, const V3& b) { return V3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; };
+    auto dot = [](const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+    V3 m[4];
+    const double us[4] = {w.uMin, w.uMax, w.uMin, w.uMax}, vs[4] = {w.vMin, w.vMin, w.vMax, w.vMax};
+    double wg0 = 0;
+    for (int i = 0; i < 4; ++i) {
+        double x, y, wg;
+        project(us[i], vs[i], x, y, wg);
+        if (!std::isfinite(x + y) || std::fabs(wg) < 1e-6) return false;
+        if (i == 0) wg0 = wg;
+        else if ((wg > 0) != (wg0 > 0)) return false;  // the rectangle would reach behind the camera
+        m[i] = {x, y, 1.0};
+    }
+    // m[0] corner, m[1] next along u, m[2] next along v, m[3] opposite.
+    const double edgeU = std::hypot(m[1].x - m[0].x, m[1].y - m[0].y), edgeV = std::hypot(m[2].x - m[0].x, m[2].y - m[0].y);
+    if (edgeU < 0.05 || edgeV < 0.03) return false;
+    const double d2 = dot(cross(m[1], m[3]), m[2]), d3 = dot(cross(m[2], m[3]), m[1]);
+    if (std::fabs(d2) < 1e-9 || std::fabs(d3) < 1e-9) return false;
+    const double k2 = dot(cross(m[0], m[3]), m[2]) / d2;
+    const double k3 = dot(cross(m[0], m[3]), m[1]) / d3;
+    const V3 n2{k2 * m[1].x - m[0].x, k2 * m[1].y - m[0].y, k2 * m[1].z - m[0].z};
+    const V3 n3{k3 * m[2].x - m[0].x, k3 * m[2].y - m[0].y, k3 * m[2].z - m[0].z};
+
+    // Focal length (in half view heights) from the right angle between the two edges, if the view is oblique enough.
+    constexpr double kDefaultFocal = 2.2;  // about 50 degrees vertical field of view
+    focal = kDefaultFocal;
+    focalMeasured = false;
+    if (std::fabs(n2.z) > 0.03 && std::fabs(n3.z) > 0.03) {
+        const double f2 = -(n2.x * n3.x + n2.y * n3.y) / (n2.z * n3.z);
+        if (std::isfinite(f2) && f2 > 1.0 && f2 < 36.0) {
+            focal = std::sqrt(f2);
+            focalMeasured = true;
+        }
+    }
+    const double f2 = focal * focal;
+    const double a2 = (n2.x * n2.x + n2.y * n2.y + f2 * n2.z * n2.z) / (n3.x * n3.x + n3.y * n3.y + f2 * n3.z * n3.z);
+    if (!(a2 > 0) || !std::isfinite(a2)) return false;
+    uvAspect = std::sqrt(a2);
+    return uvAspect > 0.1 && uvAspect < 10.0;
+}
 
 void FitInit(int mode) {
     g_mode = mode;
@@ -719,17 +854,7 @@ bool FitEnabled() { return g_enabled; }
 void FitReset(const char* reason) {
     if (!g_enabled) return;
     std::lock_guard<std::mutex> lock(g_mx);
-    g_seen.clear();
-    g_attempts = 0;
-    g_resetTick = GetTickCount64();
-    g_geo = Geometry{};
-    g_bestArea = 0;
-    g_scanLast = ScanWindow{};
-    g_scanVotes = 0;
-    g_scanStable = false;
-    g_scan = ScanWindow{};
-    g_fit = ScreenFit{};
-    Logf("FIT reset (%s)", reason);
+    ResetLocked(reason);
 }
 
 void FitOnCreateInputLayout(ID3D11InputLayout* layout, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count) {
@@ -751,11 +876,9 @@ void FitOnCreateInputLayout(ID3D11InputLayout* layout, const D3D11_INPUT_ELEMENT
 }
 
 bool FitNeedsGeometry() {
-    if (!g_enabled) return false;
-    std::lock_guard<std::mutex> lock(g_mx);
-    // A screen can be made of several draw calls (screen, glass, frame ...): look at up to six different ones during
-    // the first 20 seconds and keep the largest flat display among them.
-    return g_attempts < 6 && GetTickCount64() - g_resetTick < 20000;
+    // Always: the draw calls of the screen are watched all the time, because the game keeps the same texture when the
+    // vehicle changes, and only the mesh tells that another display is in front of us now.
+    return g_enabled;
 }
 
 void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT baseVertex) {
@@ -767,17 +890,34 @@ void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startInd
     DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
     UINT ibOffset = 0;
     ctx->IAGetIndexBuffer(&ib, &fmt, &ibOffset);
-    DrawSig sig{vb, ib, indexCount, startIndex, baseVertex};
+    const ULONGLONG now = GetTickCount64();
+    DrawSig sig{vb, ib, indexCount, startIndex, baseVertex, now};
     if (vb) vb->Release();
     if (ib) ib->Release();
+    bool newVehicle = false;
     {
         std::lock_guard<std::mutex> lock(g_mx);
-        for (const DrawSig& d : g_seen) {
-            if (d.vb == sig.vb && d.ib == sig.ib && d.count == sig.count && d.start == sig.start && d.base == sig.base) return;
+        for (DrawSig& d : g_seen) {
+            if (d.vb == sig.vb && d.ib == sig.ib && d.count == sig.count && d.start == sig.start && d.base == sig.base) {
+                d.lastSeen = now;
+                return;
+            }
         }
+        // A mesh we have not seen. If none of the known ones was drawn for a while, the vehicle was changed.
+        bool anyRecent = false;
+        for (const DrawSig& d : g_seen) anyRecent = anyRecent || now - d.lastSeen < 1500;
+        if (!g_seen.empty() && !anyRecent) {
+            newVehicle = true;
+            ResetLocked("another display mesh, the vehicle was changed");
+        }
+        // A screen can be made of several draw calls (screen, glass, frame ...): look at up to six different ones during
+        // the first 20 seconds and keep the largest flat display among them.
+        const bool budget = g_attempts < 6 && now - g_resetTick < 20000;
         g_seen.push_back(sig);
+        if (!budget) return;
         ++g_attempts;
     }
+    if (newVehicle) TouchResetScan();
     Logf("FIT looking at draw call %d: %u indices from %u, base vertex %d", g_attempts, indexCount, startIndex, baseVertex);
     Geometry g = Analyze(ctx, indexCount, startIndex, baseVertex);
     std::lock_guard<std::mutex> lock(g_mx);
@@ -793,7 +933,7 @@ void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startInd
 bool FitNeedsScan() {
     if (!g_enabled) return false;
     std::lock_guard<std::mutex> lock(g_mx);
-    return g_geo.ok && !g_scanStable && GetTickCount64() - g_resetTick < 90000;
+    return g_geo.ok && !g_scanStable && GetTickCount64() - g_resetTick < 600000;  // it only runs while the screen is in view
 }
 
 void FitNoteScanWindow(const ScanWindow& w) {
@@ -805,10 +945,32 @@ void FitNoteScanWindow(const ScanWindow& w) {
                 std::fabs(g_scanLast.vMin - w.vMin) < tol && std::fabs(g_scanLast.vMax - w.vMax) < tol;
     g_scanVotes = same ? g_scanVotes + 1 : 1;
     g_scanLast = w;
-    if (g_scanVotes >= 3) {  // the same window three times in a row
+    ++g_scanNotes;
+    if (w.shapeOk) {
+        g_shapeSamples.push_back(w.uvAspect);
+        if (g_shapeSamples.size() > 15) g_shapeSamples.erase(g_shapeSamples.begin());
+    }
+    // Stable: the same window three times in a row, and a few shape measurements to take the median of (or, if the view
+    // never allows a shape measurement, a fair number of tries).
+    if (g_scanVotes >= 3 && (g_shapeSamples.size() >= 5 || g_scanNotes >= 40)) {
         g_scan = w;
         g_scanStable = true;
         Logf("FIT visible texture window measured on screen: u %.3f..%.3f, v %.3f..%.3f", w.uMin, w.uMax, w.vMin, w.vMax);
+        g_shapeOk = false;
+        if (g_shapeSamples.size() >= 3) {
+            std::vector<double> sorted = g_shapeSamples;
+            std::sort(sorted.begin(), sorted.end());
+            const double median = sorted[sorted.size() / 2];
+            const bool consistent = sorted.back() / sorted.front() < 1.12;  // all within 12% of each other
+            Logf("FIT shape of the visible window as the camera sees it: %.3f (u : v) from %zu pictures, spread %.3f..%.3f%s", median,
+                 sorted.size(), sorted.front(), sorted.back(), consistent ? "" : " - too inconsistent, ignored");
+            if (consistent) {
+                g_shapeOk = true;
+                g_shapeAspect = median;
+            }
+        } else {
+            Logf("FIT shape of the visible window could not be measured from this view (%zu usable pictures)", g_shapeSamples.size());
+        }
         Recompute();
     }
 }

@@ -48,6 +48,7 @@ bool g_scanFrameActive = false;  // a scan picture is being built this frame (it
 int g_scanDraws = 0;
 ULONGLONG g_lastScanTick = 0;
 int g_scanLogged = 0;
+double g_scanAspect = 16.0 / 9.0;  // width / height of the picture the player sees (the scan squeezes it into 384x216)
 
 std::bitset<128> g_mask;  // slots of the immediate context that currently hold our screen view
 std::atomic<bool> g_maskAny{false};
@@ -255,10 +256,29 @@ void DecodeScan(const float* px, UINT rowPitchFloats) {
     w.vMin = vs[trim];
     w.vMax = vs[vs.size() - 1 - trim];
     w.ok = cells.size() >= 150 && w.uMax - w.uMin > 0.02 && w.vMax - w.vMin > 0.02;
+    char shapeNote[160] = "";
+    if (w.ok) {
+        // Real proportions of that window, from how the camera sees it.
+        std::vector<ShapeCell> sc;
+        sc.reserve(cells.size());
+        for (const Cell& c : cells) {
+            sc.push_back({((c.x + 0.5) / kScanW * 2.0 - 1.0) * g_scanAspect, 1.0 - (c.y + 0.5) / kScanH * 2.0, c.u, c.v});
+        }
+        double aspect = 1, focal = 0, residual = 0;
+        bool focalMeasured = false;
+        if (FitEstimateShape(sc, w, aspect, focal, focalMeasured, residual)) {
+            w.shapeOk = true;
+            w.uvAspect = aspect;
+            snprintf(shapeNote, sizeof(shapeNote), " | shape u:v %.3f (focal %.2f %s, fit error %.2f cells)", aspect, focal,
+                     focalMeasured ? "measured" : "assumed", residual);
+        } else {
+            snprintf(shapeNote, sizeof(shapeNote), " | shape not measurable from this view");
+        }
+    }
     if (g_scanLogged < 12) {
         ++g_scanLogged;
-        Logf("FIT scan: %zu cells show texture window u %.3f..%.3f, v %.3f..%.3f%s", cells.size(), w.uMin, w.uMax, w.vMin, w.vMax,
-             w.ok ? "" : " (too few cells or too small, ignored)");
+        Logf("FIT scan: %zu cells show texture window u %.3f..%.3f, v %.3f..%.3f%s%s", cells.size(), w.uMin, w.uMax, w.vMin, w.vMax,
+             w.ok ? "" : " (too few cells or too small, ignored)", shapeNote);
     }
     if (w.ok) FitNoteScanWindow(w);
 }
@@ -469,6 +489,8 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
                 g_lastScanTick = GetTickCount64();
             }
             ctx->OMSetRenderTargets(1, &g_scanRtv, nullptr);
+            g_scanAspect = g_cursor.w > 1 && g_cursor.h > 1 ? static_cast<double>(g_cursor.w) / g_cursor.h
+                                                             : static_cast<double>(vps[0].Width) / std::max(1.0f, vps[0].Height);
             D3D11_VIEWPORT vp = vps[0];
             vp.TopLeftX = 0;
             vp.TopLeftY = 0;
