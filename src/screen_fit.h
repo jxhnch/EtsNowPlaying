@@ -31,7 +31,8 @@ struct ScreenOrientation {
     int upSign = 1;     // +1 if it grows upwards
 };
 
-void FitInit(bool enabled);
+// mode: 0 = off, 1 = measure and apply, 2 = measure and write the result to the log only
+void FitInit(int mode);
 bool FitEnabled();
 void FitReset(const char* reason);  // a new screen texture appeared (new truck / reload)
 

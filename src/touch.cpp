@@ -228,41 +228,61 @@ void DecodeScan(const float* px, UINT rowPitchFloats) {
         }
     }
     ScreenOrientation o;
-    if (cells.size() < 24) {
+    if (cells.size() < 60) {
         if (g_scanLogged < 6) {
             ++g_scanLogged;
             Logf("FIT scan: only %zu covered cells, screen too small or not in view", cells.size());
         }
         return;
     }
-    const double mx = sx / n, my = sy / n, mu = su / n, mv = sv / n;
-    double cxx = 0, cxy = 0, cyy = 0, cxu = 0, cyu = 0, cxv = 0, cyv = 0;
+    // Which way does the texture run on the screen? Compare where, on the screen, the cells with high and with low
+    // texture coordinates are. (A plane fit over all cells is thrown off by frame and bezel cells.)
+    std::vector<double> us, vs;
     for (const Cell& c : cells) {
-        const double dx = c.x - mx, dy = c.y - my, du = c.u - mu, dv = c.v - mv;
-        cxx += dx * dx;
-        cxy += dx * dy;
-        cyy += dy * dy;
-        cxu += dx * du;
-        cyu += dy * du;
-        cxv += dx * dv;
-        cyv += dy * dv;
+        us.push_back(c.u);
+        vs.push_back(c.v);
     }
-    const double det = cxx * cyy - cxy * cxy;
-    if (det < 1e-6) return;
-    const double dudx = (cyy * cxu - cxy * cyu) / det, dudy = (cxx * cyu - cxy * cxu) / det;
-    const double dvdx = (cyy * cxv - cxy * cyv) / det, dvdy = (cxx * cyv - cxy * cxv) / det;
-
-    // Going right on the screen changes (u,v) by (dudx,dvdx); going up (= -y) by (-dudy,-dvdy).
-    const double rightU = dudx, rightV = dvdx, upU = -dudy, upV = -dvdy;
-    const bool rightIsU = std::fabs(rightU) >= std::fabs(rightV), upIsU = std::fabs(upU) >= std::fabs(upV);
-    const double rightMain = rightIsU ? rightU : rightV, rightOther = rightIsU ? rightV : rightU;
-    const double upMain = upIsU ? upU : upV, upOther = upIsU ? upV : upU;
-    const bool clear = std::fabs(rightMain) > 1.8 * std::fabs(rightOther) && std::fabs(upMain) > 1.8 * std::fabs(upOther) &&
+    std::sort(us.begin(), us.end());
+    std::sort(vs.begin(), vs.end());
+    const double uLo = us[us.size() / 20], uHi = us[us.size() - 1 - us.size() / 20];
+    const double vLo = vs[vs.size() / 20], vHi = vs[vs.size() - 1 - vs.size() / 20];
+    auto centroid = [&](bool useU, bool high, double& cx, double& cy) {
+        double sumX = 0, sumY = 0, count = 0;
+        const double lo = useU ? uLo : vLo, hi = useU ? uHi : vHi, cut = (hi - lo) * 0.3;
+        for (const Cell& c : cells) {
+            const double value = useU ? c.u : c.v;
+            if (high ? value >= hi - cut : value <= lo + cut) {
+                sumX += c.x;
+                sumY += c.y;
+                count += 1;
+            }
+        }
+        cx = count > 0 ? sumX / count : 0;
+        cy = count > 0 ? sumY / count : 0;
+        return count >= 8;
+    };
+    double ux1, uy1, ux0, uy0, vx1, vy1, vx0, vy0;
+    if (!(uHi - uLo > 0.05 && vHi - vLo > 0.05) || !centroid(true, true, ux1, uy1) || !centroid(true, false, ux0, uy0) ||
+        !centroid(false, true, vx1, vy1) || !centroid(false, false, vx0, vy0)) {
+        if (g_scanLogged < 12) {
+            ++g_scanLogged;
+            Logf("FIT scan: %zu cells but the texture coordinates barely change (u %.3f..%.3f, v %.3f..%.3f)", cells.size(), uLo,
+                 uHi, vLo, vHi);
+        }
+        return;
+    }
+    // Moving towards higher u (or v) moves the cells by (dx,dy) on the screen (x right, y down).
+    const double dxU = ux1 - ux0, dyU = uy1 - uy0, dxV = vx1 - vx0, dyV = vy1 - vy0;
+    // Going right on the screen: which of u / v grows, and with which sign? Going up is -y.
+    const bool rightIsU = std::fabs(dxU) >= std::fabs(dxV), upIsU = std::fabs(dyU) >= std::fabs(dyV);
+    const double rightMain = rightIsU ? dxU : dxV, rightOther = rightIsU ? dxV : dxU;
+    const double upMain = upIsU ? -dyU : -dyV, upOther = upIsU ? -dyV : -dyU;
+    const bool clear = std::fabs(rightMain) > 2.0 * std::fabs(rightOther) && std::fabs(upMain) > 2.0 * std::fabs(upOther) &&
                        rightIsU != upIsU;
     if (g_scanLogged < 12) {
         ++g_scanLogged;
-        Logf("FIT scan: %zu cells, going right changes (u,v) by (%.4f,%.4f), going up by (%.4f,%.4f) per cell -> %s",
-             cells.size(), rightU, rightV, upU, upV, clear ? "clear" : "ambiguous, ignored");
+        Logf("FIT scan: %zu cells; higher u moves by (%.1f,%.1f) cells on screen, higher v by (%.1f,%.1f) -> %s", cells.size(), dxU,
+             dyU, dxV, dyV, clear ? "clear" : "ambiguous, ignored");
     }
     if (!clear) return;
     o.ok = true;

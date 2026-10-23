@@ -11,7 +11,7 @@ struct Settings {
     int radioStaleMs = 2500;        // [radio] pause_after_ms: no stream data for this long = radio paused
     int radioHoldMs = 600;          // [radio] switch_hold_ms: keep the radio screen this long after a stream ends
     bool touch = true;              // [touch] enabled: click the buttons on the screen with the mouse
-    bool autoFit = true;            // [screen] auto_fit: fit the picture to the shape of each truck's display
+    int autoFit = 0;                // [screen] auto_fit: 0 off, 1 fit the picture to each truck's display, 2 measure only
     bool textureFinder = false;     // [debug] texture_finder: developer tool (Ctrl+Shift+F6..F9), not in the default ini
 };
 

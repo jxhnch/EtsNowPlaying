@@ -75,7 +75,7 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
         ep::RadioTrackerInit();
         bool net = ep::NetHooksInstall();
         bool engine = features.screen && ep::EngineHooksInstall("/home/EtsNowPlaying/gps.tobj", features.disableGameGps);
-        ep::FitInit(features.screen && features.touch && ep::GetSettings().autoFit);
+        ep::FitInit(features.screen && features.touch ? ep::GetSettings().autoFit : 0);
         bool gfx = ep::D3D11HooksInstall(features.screen, features.upload, features.touch && ep::GetSettings().touch);
         ep::MediaStart();
         ep::CoverLookupStart();

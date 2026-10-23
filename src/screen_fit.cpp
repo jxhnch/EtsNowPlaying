@@ -29,10 +29,21 @@ struct Geometry {
     double lenU = 1, lenV = 1;  // physical length of one texture unit along u and v
 };
 
+struct DrawSig {
+    void* vb;
+    void* ib;
+    UINT count, start;
+    INT base;
+};
+
 std::mutex g_mx;
 bool g_enabled = false;
+int g_mode = 0;  // 0 off, 1 apply, 2 measure and log only
 std::unordered_map<ID3D11InputLayout*, std::vector<Elem>> g_layouts;
 Geometry g_geo;
+std::vector<DrawSig> g_seen;  // draw calls already looked at since the screen appeared
+int g_attempts = 0;
+ULONGLONG g_resetTick = 0;
 ScreenOrientation g_orient;      // accepted orientation
 ScreenOrientation g_lastOrient;  // last measurement, accepted after three equal ones
 int g_orientVotes = 0;
@@ -282,6 +293,74 @@ bool GuessLayout(const std::vector<uint32_t>& unique, uint32_t minV, const Sourc
     return plausible > 0 && best.error < 0.005;  // better than 0.5% of the display's size
 }
 
+// Finds the biggest set of vertices that lie on one flat surface with an affine texture mapping, by trying every
+// triple of vertices as the definition of such a mapping and counting how many other vertices agree.
+bool RobustSubset(const std::vector<Vertex>& v, std::vector<Vertex>& out) {
+    const size_t n = v.size();
+    if (n < 4 || n > 60) return false;
+    double lo[3] = {1e30, 1e30, 1e30}, hi[3] = {-1e30, -1e30, -1e30};
+    for (const Vertex& x : v) {
+        for (int k = 0; k < 3; ++k) {
+            lo[k] = std::min(lo[k], x.p[k]);
+            hi[k] = std::max(hi[k], x.p[k]);
+        }
+    }
+    const double size = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                                  (hi[2] - lo[2]) * (hi[2] - lo[2]));
+    if (!(size > 0)) return false;
+    const double tol = 0.01 * size;
+
+    size_t bestCount = 0;
+    double bestArea = 0;
+    std::vector<char> bestFlags, flags(n);
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            for (size_t k = j + 1; k < n; ++k) {
+                const double d1u = v[j].uv[0] - v[i].uv[0], d1v = v[j].uv[1] - v[i].uv[1];
+                const double d2u = v[k].uv[0] - v[i].uv[0], d2v = v[k].uv[1] - v[i].uv[1];
+                const double det = d1u * d2v - d1v * d2u;
+                if (std::fabs(det) < 1e-3) continue;  // texture coordinates (nearly) on a line
+                double A[3], B[3];
+                for (int c = 0; c < 3; ++c) {
+                    const double e1 = v[j].p[c] - v[i].p[c], e2 = v[k].p[c] - v[i].p[c];
+                    A[c] = (d2v * e1 - d1v * e2) / det;
+                    B[c] = (-d2u * e1 + d1u * e2) / det;
+                }
+                size_t count = 0;
+                double umn = 1e30, umx = -1e30, vmn = 1e30, vmx = -1e30;
+                for (size_t m = 0; m < n; ++m) {
+                    const double du = v[m].uv[0] - v[i].uv[0], dv = v[m].uv[1] - v[i].uv[1];
+                    double dist2 = 0;
+                    for (int c = 0; c < 3; ++c) {
+                        const double d = v[i].p[c] + A[c] * du + B[c] * dv - v[m].p[c];
+                        dist2 += d * d;
+                    }
+                    flags[m] = dist2 <= tol * tol;
+                    if (flags[m]) {
+                        ++count;
+                        umn = std::min(umn, v[m].uv[0]);
+                        umx = std::max(umx, v[m].uv[0]);
+                        vmn = std::min(vmn, v[m].uv[1]);
+                        vmx = std::max(vmx, v[m].uv[1]);
+                    }
+                }
+                const double area = (umx - umn) * (vmx - vmn);
+                if (count > bestCount || (count == bestCount && area > bestArea)) {
+                    bestCount = count;
+                    bestArea = area;
+                    bestFlags = flags;
+                }
+            }
+        }
+    }
+    if (bestCount < 4) return false;
+    out.clear();
+    for (size_t m = 0; m < n; ++m) {
+        if (bestFlags[m]) out.push_back(v[m]);
+    }
+    return true;
+}
+
 Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT baseVertex) {
     Geometry g;
     g.tried = true;
@@ -404,16 +483,46 @@ Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT
         return g;
     }
 
+    // Dump of the vertices, for diagnosis.
+    for (size_t i = 0; i < verts.size() && i < 24; ++i) {
+        Logf("FIT   vertex %zu: pos=(%.4f %.4f %.4f) uv=(%.4f %.4f)", i, verts[i].p[0], verts[i].p[1], verts[i].p[2],
+             verts[i].uv[0], verts[i].uv[1]);
+    }
+    // Texture coordinates may sit in another tile (e.g. 3..4, the texture wraps): move them into 0..1.
+    double shift[2] = {0, 0};
+    for (int k = 0; k < 2; ++k) {
+        double mn = 1e30, mx = -1e30;
+        for (const Vertex& v : verts) {
+            mn = std::min(mn, v.uv[k]);
+            mx = std::max(mx, v.uv[k]);
+        }
+        const double base = std::floor(mn + 0.01);
+        if (base != 0 && mx - base <= 1.05 && mn - base >= -0.05) shift[k] = base;
+    }
+    if (shift[0] != 0 || shift[1] != 0) {
+        for (Vertex& v : verts) {
+            v.uv[0] -= shift[0];
+            v.uv[1] -= shift[1];
+        }
+        Logf("FIT texture coordinates lie in tile (%.0f,%.0f), moved to 0..1", shift[0], shift[1]);
+    }
+    // The mesh may contain more than the screen (frame, bezel). Keep the largest part that is one flat surface.
+    std::vector<Vertex> flat;
+    bool robust = RobustSubset(verts, flat);
+    if (!robust) flat = verts;
+    else Logf("FIT %zu of %zu vertices form one flat, evenly textured surface (the screen)", flat.size(), verts.size());
+
     Surface s;
-    if (!FitSurface(verts, s)) {
+    if (!FitSurface(flat, s)) {
         Logf("FIT texture coordinates are degenerate");
         return g;
     }
     const double du = s.uvMax[0] - s.uvMin[0], dv = s.uvMax[1] - s.uvMin[1];
     const double pu = s.lenU * du, pv = s.lenV * dv;
-    Logf("FIT mesh: %zu vertices, %u indices, uv u=%.4f..%.4f v=%.4f..%.4f, physical size %.5f x %.5f (aspect %.3f), "
+    Logf("FIT mesh: %zu vertices (%zu used), %u indices, uv u=%.4f..%.4f v=%.4f..%.4f, physical size %.5f x %.5f (aspect %.3f), "
          "flatness error %.3f%%",
-         verts.size(), indexCount, s.uvMin[0], s.uvMax[0], s.uvMin[1], s.uvMax[1], pu, pv, pv > 0 ? pu / pv : 0.0, s.error * 100);
+         verts.size(), flat.size(), indexCount, s.uvMin[0], s.uvMax[0], s.uvMin[1], s.uvMax[1], pu, pv, pv > 0 ? pu / pv : 0.0,
+         s.error * 100);
     if (!PlausibleSurface(s)) {
         Logf("FIT rejected: texture range or aspect ratio not plausible for a display");
         return g;
@@ -490,7 +599,8 @@ void Recompute() {
     inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
     g_fit.fromGeometry = g_geo.ok;
     g_fit.valid = true;
-    Logf("FIT result: %s | screen right = texture %c%c, screen up = texture %c%c | canvas->texel [%.3f %.3f %.3f %.3f %.1f %.1f]",
+    Logf("FIT result%s: %s | screen right = texture %c%c, screen up = texture %c%c | canvas->texel [%.3f %.3f %.3f %.3f %.1f %.1f]",
+         g_mode == 2 ? " (would be applied, measure-only mode)" : "",
          g_geo.ok ? "real display shape" : "orientation only (picture fills the display)", o.rightSign > 0 ? '+' : '-',
          o.rightAxis == 0 ? 'u' : 'v', o.upSign > 0 ? '+' : '-', o.upAxis == 0 ? 'u' : 'v', m[0], m[1], m[2], m[3], m[4],
          m[5]);
@@ -498,9 +608,10 @@ void Recompute() {
 
 }  // namespace
 
-void FitInit(bool enabled) {
-    g_enabled = enabled;
-    Logf("FIT %s", enabled ? "enabled" : "disabled");
+void FitInit(int mode) {
+    g_mode = mode;
+    g_enabled = mode >= 1;
+    Logf("FIT %s", mode == 1 ? "enabled" : mode == 2 ? "measuring only (nothing is changed on the screen)" : "disabled");
 }
 
 bool FitEnabled() { return g_enabled; }
@@ -508,6 +619,9 @@ bool FitEnabled() { return g_enabled; }
 void FitReset(const char* reason) {
     if (!g_enabled) return;
     std::lock_guard<std::mutex> lock(g_mx);
+    g_seen.clear();
+    g_attempts = 0;
+    g_resetTick = GetTickCount64();
     g_geo = Geometry{};
     g_orient = ScreenOrientation{};
     g_lastOrient = ScreenOrientation{};
@@ -538,19 +652,38 @@ void FitOnCreateInputLayout(ID3D11InputLayout* layout, const D3D11_INPUT_ELEMENT
 bool FitNeedsGeometry() {
     if (!g_enabled) return false;
     std::lock_guard<std::mutex> lock(g_mx);
-    return !g_geo.tried;
+    // A screen can be made of several draw calls (screen, frame, ...): look at up to six different ones, for the
+    // first 20 seconds, until one of them turns out to be the flat display.
+    return !g_geo.ok && g_attempts < 6 && GetTickCount64() - g_resetTick < 20000;
 }
 
 void FitCaptureGeometry(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT baseVertex) {
+    // Which draw call is this? (vertex buffer, index buffer and range identify a mesh)
+    ID3D11Buffer* vb = nullptr;
+    UINT stride = 0, offset = 0;
+    ctx->IAGetVertexBuffers(0, 1, &vb, &stride, &offset);
+    ID3D11Buffer* ib = nullptr;
+    DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+    UINT ibOffset = 0;
+    ctx->IAGetIndexBuffer(&ib, &fmt, &ibOffset);
+    DrawSig sig{vb, ib, indexCount, startIndex, baseVertex};
+    if (vb) vb->Release();
+    if (ib) ib->Release();
     {
         std::lock_guard<std::mutex> lock(g_mx);
-        if (g_geo.tried) return;
-        g_geo.tried = true;  // one attempt per screen, whatever happens
+        for (const DrawSig& d : g_seen) {
+            if (d.vb == sig.vb && d.ib == sig.ib && d.count == sig.count && d.start == sig.start && d.base == sig.base) return;
+        }
+        g_seen.push_back(sig);
+        ++g_attempts;
     }
+    Logf("FIT looking at draw call %d: %u indices from %u, base vertex %d", g_attempts, indexCount, startIndex, baseVertex);
     Geometry g = Analyze(ctx, indexCount, startIndex, baseVertex);
     std::lock_guard<std::mutex> lock(g_mx);
-    g_geo = g;
-    Recompute();
+    if (g.ok && !g_geo.ok) {
+        g_geo = g;
+        Recompute();
+    }
 }
 
 bool FitNeedsOrientation() {
@@ -576,7 +709,7 @@ void FitNoteOrientation(const ScreenOrientation& o) {
 
 ScreenFit FitGet() {
     std::lock_guard<std::mutex> lock(g_mx);
-    return g_fit;
+    return g_mode == 1 ? g_fit : ScreenFit{};  // in measure-only mode the result is only logged
 }
 
 }  // namespace ep
