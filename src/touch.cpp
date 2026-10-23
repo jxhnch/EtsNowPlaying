@@ -50,6 +50,10 @@ bool g_replayedThisFrame = false;
 int g_ringIndex = 0;
 int g_logged = 0;
 int g_replays = 0;
+uint64_t g_hits = 0, g_misses = 0;
+float g_lastRaw[4] = {};
+float g_lastPixelX = 0, g_lastPixelY = 0, g_lastRtW = 0, g_lastRtH = 0;
+ULONGLONG g_lastStats = 0;
 
 std::mutex g_stateMx;
 TouchState g_state;
@@ -143,11 +147,18 @@ bool ForegroundIsUs() {
 void DecodeResult(const float* px) {
     const float r = px[0], g = px[1], b = px[2];
     std::lock_guard<std::mutex> lock(g_stateMx);
-    if (g_logged < 40) {
+    memcpy(g_lastRaw, px, sizeof(g_lastRaw));
+    // The target is cleared to 0, so anything above 0 was drawn by the screen. How bright that is depends on the
+    // time of day and the game's exposure (at night the values are tiny), so no brightness threshold here:
+    // only the ratios r/b and g/b matter.
+    const bool drawn = std::isfinite(r) && std::isfinite(g) && std::isfinite(b) && b > 1e-9f;
+    if (drawn) ++g_hits;
+    else ++g_misses;
+    if (g_logged < 25 && (drawn || g_logged < 6)) {
         ++g_logged;
-        Logf("TOUCH probe pixel r=%.4f g=%.4f b=%.4f a=%.4f", r, g, b, px[3]);
+        Logf("TOUCH probe pixel %s r=%g g=%g b=%g a=%g", drawn ? "HIT" : "miss", r, g, b, px[3]);
     }
-    if (b < 0.05f) {  // nothing was drawn at the cursor
+    if (!drawn) {  // nothing was drawn at the cursor
         g_state.hover = false;
         return;
     }
@@ -285,6 +296,10 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
     if (nvp > 0 && rtW > 0 && rtH > 0) {
         float px = std::floor(g_cursor.x * rtW / g_cursor.w);
         float py = std::floor(g_cursor.y * rtH / g_cursor.h);
+        g_lastPixelX = px;
+        g_lastPixelY = py;
+        g_lastRtW = rtW;
+        g_lastRtH = rtH;
 
         t_replaying = true;
         const FLOAT zero[4] = {0, 0, 0, 0};
@@ -370,6 +385,16 @@ void TouchOnPresent(IDXGISwapChain* sc) {
     }
     g_replayedThisFrame = false;
     g_clearedThisFrame = false;
+
+    // A short status line every 10 s while the screen is in use, so a report shows what the plugin saw.
+    if (g_replays > 0 && GetTickCount64() - g_lastStats > 10000) {
+        g_lastStats = GetTickCount64();
+        Logf("TOUCH stats: probe draws=%d hits=%llu misses=%llu | mouse in window=(%.0f,%.0f of %.0fx%.0f) inside=%d -> "
+             "target pixel (%.0f,%.0f of %.0fx%.0f) | last raw r=%g g=%g b=%g",
+             g_replays, static_cast<unsigned long long>(g_hits), static_cast<unsigned long long>(g_misses), g_cursor.x,
+             g_cursor.y, g_cursor.w, g_cursor.h, g_cursor.inside ? 1 : 0, g_lastPixelX, g_lastPixelY, g_lastRtW, g_lastRtH,
+             g_lastRaw[0], g_lastRaw[1], g_lastRaw[2]);
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_stateMx);

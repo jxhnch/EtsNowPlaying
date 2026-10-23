@@ -7,8 +7,8 @@ direkt in der Kabine auf Zurück / Pause / Weiter klicken.
 *[English](README.md) · Deutsch*
 
 <p align="center">
-  <img src="docs/images/radio-cover.png" alt="Spielradio mit Song-Cover" width="48%">
-  <img src="docs/images/radio-loading.png" alt="Radiosender" width="48%">
+  <img src="docs/images/radio.png" alt="Spielradio mit Song-Cover" width="48%">
+  <img src="docs/images/spotify.png" alt="Spotify mit Tasten" width="48%">
 </p>
 
 ## Das bekommst du

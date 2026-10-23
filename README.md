@@ -7,8 +7,8 @@ previous / pause / next right in the cabin.
 *English · [Deutsch](README.de.md)*
 
 <p align="center">
-  <img src="docs/images/radio-cover.png" alt="In-game radio with song cover" width="48%">
-  <img src="docs/images/radio-loading.png" alt="Radio station" width="48%">
+  <img src="docs/images/radio.png" alt="In-game radio with song cover" width="48%">
+  <img src="docs/images/spotify.png" alt="Spotify with controls" width="48%">
 </p>
 
 ## What you get
