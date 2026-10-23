@@ -17,7 +17,9 @@ direkt in der Kabine auf Zurück / Pause / Weiter klicken.
 - **Spotify:** Cover, Titel, Interpret, Album, Fortschrittsbalken und Play/Pause – aus der Windows-Mediensteuerung,
   Spotify kann also im Hintergrund bleiben.
 - **Schaltet selbst um:** Radio an → Radio, Radio aus → Spotify.
-- **Klicken zum Steuern:** Zurück, Play/Pause und Weiter gehen mit der Maus, direkt auf dem Display.
+- **Klicken zum Steuern:** Zurück, Play/Pause und Weiter gehen mit der Maus, direkt auf dem Display. Auf den Fortschrittsbalken
+  klicken oder ihn ziehen, um im Song vor- und zurückzuspulen.
+- **Passt in jede Kabine:** Das Bild passt sich selbst an die Form des Displays jedes Fahrzeugs an – nichts pro Truck einstellen.
 - **Eine Datei.** Nichts weiter zu installieren. Funktioniert mit TruckersMP.
 
 ## Installieren
@@ -37,6 +39,7 @@ Entferne vorher andere Plugins, die das GPS-Display verändern, sie würden sich
 - **Radio:** im Spiel das Radio einschalten. Die Songtitel kommen aus dem Radio-Stream selbst, einige Sender, die keine Titel
   senden, zeigen deshalb nur ihren Namen.
 - **Tasten:** Bei sichtbarem Mauszeiger in der Kabine (rechte Maustaste nicht gedrückt) auf dem Display ⏮ ⏯ ⏭ anklicken.
+  Auf den Fortschrittsbalken klicken oder ziehen, um zu spulen (Spotify).
 
 ## Einstellungen
 
@@ -44,7 +47,8 @@ Entferne vorher andere Plugins, die das GPS-Display verändern, sie würden sich
 
 | Einstellung | Standard | |
 |---|---|---|
-| `[screen] flip_vertical` | `1` | Auf `0` setzen, wenn das Bild kopfsteht. |
+| `[screen] flip_vertical` | `1` | Auf `0` setzen, wenn das Bild kopfsteht. (Nur bei `auto_fit=0`.) |
+| `[screen] auto_fit` | `1` | Bild an das Display jedes Fahrzeugs anpassen. `0` = aus. |
 | `[media] app_filter` | `spotify` | Nur diese App zeigen. Leer = jeder Mediaplayer. |
 | `[radio] cover_lookup` | `1` | Song-Cover und Sender-Logos online suchen. `0` = aus. |
 | `[touch] enabled` | `1` | Maus-Tasten auf dem Display. `0` = aus. |

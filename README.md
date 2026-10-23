@@ -17,7 +17,9 @@ previous / pause / next right in the cabin.
 - **Spotify:** cover, title, artist, album, a progress bar and play/pause – shown from the Windows media controls,
   so Spotify can stay in the background.
 - **Switches by itself:** radio on → radio, radio off → Spotify.
-- **Click to control:** previous, play/pause and next work with the mouse, right on the screen.
+- **Click to control:** previous, play/pause and next work with the mouse, right on the screen. Click or drag the progress bar to
+  jump around in the song.
+- **Fits every cabin:** the picture adapts to the shape of each vehicle's display by itself – no setup per truck.
 - **One file.** Nothing else to install. Works with TruckersMP.
 
 ## Install
@@ -37,6 +39,7 @@ Remove other plugins that change the GPS screen first, they would get in each ot
 - **Radio:** switch on the radio in the game. Song titles come from the radio stream itself, so a few stations that do not
   send titles only show their name.
 - **Buttons:** with the mouse pointer visible in the cabin (don't hold the right mouse button), click ⏮ ⏯ ⏭ on the screen.
+  Click or drag on the progress bar to rewind / fast-forward (Spotify).
 
 ## Settings
 
@@ -44,7 +47,8 @@ Remove other plugins that change the GPS screen first, they would get in each ot
 
 | Setting | Default | |
 |---|---|---|
-| `[screen] flip_vertical` | `1` | Set `0` if the picture is upside down. |
+| `[screen] flip_vertical` | `1` | Set `0` if the picture is upside down. (Only used when `auto_fit=0`.) |
+| `[screen] auto_fit` | `1` | Fit the picture to each vehicle's display. `0` = off. |
 | `[media] app_filter` | `spotify` | Only show this app. Empty = any media player. |
 | `[radio] cover_lookup` | `1` | Look up song covers and station logos online. `0` = off. |
 | `[touch] enabled` | `1` | Mouse buttons on the screen. `0` = off. |

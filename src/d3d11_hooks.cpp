@@ -367,13 +367,7 @@ void STDMETHODCALLTYPE HookPSSetSRV(ID3D11DeviceContext* ctx, UINT start, UINT n
                 swapped[i] = ours;
             }
         }
-        if (any) {
-            srvs = swapped;
-            static std::atomic<int> deferredLogged{0};
-            if (ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE && deferredLogged.fetch_add(1) < 5) {
-                Logf("SCREEN the screen view is bound on a deferred context (%p), the mouse and the scan cannot see it there", ctx);
-            }
-        }
+        if (any) srvs = swapped;
         if (any || TouchHasBindings()) TouchNoteBind(ctx, start, n, isScreen);  // beta: where is the screen bound?
     }
 

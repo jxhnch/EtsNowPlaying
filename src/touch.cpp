@@ -48,8 +48,6 @@ bool g_scanFrameActive = false;  // a scan picture is being built this frame (it
 int g_scanDraws = 0;
 ULONGLONG g_lastScanTick = 0;
 int g_scanLogged = 0;
-int g_replayInfoLogged = 0;  // diagnostic lines about the pipeline state of the first replays after a reset
-int g_scanPictures = 0;
 double g_scanAspect = 16.0 / 9.0;  // width / height of the picture the player sees (the scan squeezes it into 384x216)
 
 std::bitset<128> g_mask;  // slots of the immediate context that currently hold our screen view
@@ -236,13 +234,10 @@ void DecodeScan(const float* px, UINT rowPitchFloats) {
         }
     }
     ScreenOrientation o;
-    ++g_scanPictures;
     if (cells.size() < 60) {
         if (g_scanLogged < 6) {
             ++g_scanLogged;
             Logf("FIT scan: only %zu covered cells, screen too small or not in view", cells.size());
-        } else if (g_scanPictures % 120 == 0) {
-            Logf("FIT scan: still nothing on screen after %d pictures", g_scanPictures);
         }
         return;
     }
@@ -445,8 +440,6 @@ void TouchResetScan() {
     for (auto& p : g_scanPending) p = false;
     g_lastScanTick = 0;
     g_scanLogged = 0;
-    g_replayInfoLogged = 0;
-    g_scanPictures = 0;
 }
 
 void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce) {
@@ -502,38 +495,6 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
             }
             res->Release();
         }
-    }
-
-    if (g_replayInfoLogged < 8 && rtvs[0]) {
-        // What does the pipeline look like when the game draws the screen? (for vehicles where nothing shows up)
-        ++g_replayInfoLogged;
-        int nRt = 0;
-        for (auto* r : rtvs) nRt += r ? 1 : 0;
-        char rtNote[128] = "?";
-        ID3D11Resource* res = nullptr;
-        rtvs[0]->GetResource(&res);
-        ID3D11Texture2D* t2 = nullptr;
-        if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&t2)))) {
-            D3D11_TEXTURE2D_DESC d{};
-            t2->GetDesc(&d);
-            snprintf(rtNote, sizeof(rtNote), "fmt=%d %ux%u samples=%u", static_cast<int>(d.Format), d.Width, d.Height, d.SampleDesc.Count);
-        }
-        if (t2) t2->Release();
-        if (res) res->Release();
-        ID3D11RasterizerState* rs = nullptr;
-        ctx->RSGetState(&rs);
-        D3D11_RASTERIZER_DESC rd{};
-        if (rs) rs->GetDesc(&rd);
-        SafeRelease(rs);
-        D3D11_BLEND_DESC bdesc{};
-        if (bs) bs->GetDesc(&bdesc);
-        D3D11_DEPTH_STENCIL_DESC dsd{};
-        if (dss) dss->GetDesc(&dsd);
-        Logf("TOUCH replay info: %d render target(s), rt0 %s, depth=%d, viewport %.0f,%.0f %.0fx%.0f, cull=%d scissor=%d, "
-             "alphaToCoverage=%d depthTest=%d slots=%d (client %.0fx%.0f)",
-             nRt, rtNote, dsv ? 1 : 0, nvp ? vps[0].TopLeftX : 0.0f, nvp ? vps[0].TopLeftY : 0.0f, nvp ? vps[0].Width : 0.0f,
-             nvp ? vps[0].Height : 0.0f, static_cast<int>(rd.CullMode), rd.ScissorEnable ? 1 : 0, bdesc.AlphaToCoverageEnable ? 1 : 0,
-             dsd.DepthEnable ? 1 : 0, nSlots, g_cursor.w, g_cursor.h);
     }
 
     // Only the main view: reflection, shadow and cube-map passes draw the screen into small targets too.
