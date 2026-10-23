@@ -73,4 +73,18 @@ Included: [MinHook](https://github.com/TsudaKageyu/minhook) and the SCS SDK head
 Not affiliated with SCS Software, TruckersMP, Spotify, Apple or Deezer. The plugin changes game code in memory – use it at your
 own risk and follow the rules of the servers you play on.
 
+## Privacy Policy & Terms of Use
+
+**Privacy.** EtsNowPlaying has no accounts, no analytics and no telemetry of its own. It reads what is playing from the game's
+radio stream and the Windows media controls on your PC. With `[radio] cover_lookup=1` (the default) it sends the **current radio
+song title and the station name** to **iTunes Search (Apple), Deezer and radio-browser.info** to find a cover or logo; like any web
+request, these services see your IP address. Nothing else is sent: no personal data, no game data, no Spotify data. Set
+`cover_lookup=0` to switch off all online requests. Logos are cached in `Documents\Euro Truck Simulator 2\EtsNowPlaying\logos`,
+and `diag.log` stays on your PC unless you send it yourself.
+
+**Terms.** Free software under the [MIT License](LICENSE), provided "as is" without warranty. The plugin changes game code in
+memory: use it at your own risk and follow the rules of the servers you play on (e.g. TruckersMP). Covers and logos belong to their
+rights holders and are only displayed, not stored beyond the logo cache; the terms of iTunes, Deezer and radio-browser.info apply
+to their data. Not affiliated with SCS Software, TruckersMP, Spotify, Apple or Deezer.
+
 [MIT License](LICENSE)
