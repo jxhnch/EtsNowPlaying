@@ -37,7 +37,7 @@ void LoadSettings(const std::wstring& dir) {
                 "[screen]\r\n"
                 "; 1 = flip the picture vertically. Set to 0 if the screen is upside down.\r\n"
                 "flip_vertical=1\r\n"
-                "; Experimental: 1 = fit the picture to the shape of each truck's display. 2 = only measure and log. 0 = off.\r\n"
+                "; 1 = fit the picture to the shape of each vehicle's display. 0 = off (plain mapping). 2 = only measure and log.\r\n"
                 "auto_fit=1\r\n"
                 "\r\n"
                 "[media]\r\n"
