@@ -23,6 +23,7 @@ struct TouchState {
 
 using PsSetSrvFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);
 
+// `enabled`: mouse input. (The coarse scan for the screen fit shares this machinery and has its own switch.)
 void TouchInit(bool enabled, PsSetSrvFn originalPsSetSrv);
 
 // Called when the view of our screen texture changes (the game recreated the screen).
@@ -32,6 +33,9 @@ void TouchSetScreenView(ID3D11ShaderResourceView* ours);
 void TouchNoteBind(ID3D11DeviceContext* ctx, UINT start, UINT count, const bool* isScreen);
 bool TouchHasBindings();
 bool TouchNeedsReplay(ID3D11DeviceContext* ctx);
+// True if this draw call really shows our screen (checked against the pipeline, not just the bookkeeping).
+bool TouchScreenBound(ID3D11DeviceContext* ctx);
+void TouchResetScan();  // forget scans in flight (a new screen appeared)
 void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce);
 
 // Once per frame, from the Present hook.

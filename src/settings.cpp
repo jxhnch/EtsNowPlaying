@@ -37,6 +37,8 @@ void LoadSettings(const std::wstring& dir) {
                 "[screen]\r\n"
                 "; 1 = flip the picture vertically. Set to 0 if the screen is upside down.\r\n"
                 "flip_vertical=1\r\n"
+                "; 1 = fit the picture to the shape of each truck's display (no stretching). 0 = always fill the display.\r\n"
+                "auto_fit=1\r\n"
                 "\r\n"
                 "[media]\r\n"
                 "; Only show media from apps whose name contains this text. Empty = any player.\r\n"
@@ -55,6 +57,7 @@ void LoadSettings(const std::wstring& dir) {
     }
     // Upgrades from older builds.
     EnsureKey(ini, L"screen", L"flip_vertical", L"1");
+    EnsureKey(ini, L"screen", L"auto_fit", L"1");
     EnsureKey(ini, L"media", L"app_filter", L"spotify");
     EnsureKey(ini, L"radio", L"cover_lookup", L"1");
     EnsureKey(ini, L"touch", L"enabled", L"1");
@@ -71,6 +74,7 @@ void LoadSettings(const std::wstring& dir) {
     g_settings.radioHoldMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"switch_hold_ms", 600, ini.c_str()));
     g_settings.touch = GetPrivateProfileIntW(L"touch", L"enabled", 1, ini.c_str()) != 0;
     g_settings.textureFinder = GetPrivateProfileIntW(L"debug", L"texture_finder", 0, ini.c_str()) != 0;
+    g_settings.autoFit = GetPrivateProfileIntW(L"screen", L"auto_fit", 1, ini.c_str()) != 0;
 
     wchar_t filter[128] = {};
     GetPrivateProfileStringW(L"media", L"app_filter", L"spotify", filter, 128, ini.c_str());
@@ -80,8 +84,8 @@ void LoadSettings(const std::wstring& dir) {
     for (auto& c : f) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     g_settings.appFilter = f;
 
-    Logf("SETTINGS flip_vertical=%d app_filter='%s' cover_lookup=%d touch=%d", g_settings.flipVertical,
-         g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.touch);
+    Logf("SETTINGS flip_vertical=%d auto_fit=%d app_filter='%s' cover_lookup=%d touch=%d", g_settings.flipVertical,
+         g_settings.autoFit, g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.touch);
 }
 
 }  // namespace ep

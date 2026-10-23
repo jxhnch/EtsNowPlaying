@@ -4,6 +4,7 @@
 #include "log.h"
 #include "renderer.h"
 #include "screen_assets.h"
+#include "screen_fit.h"
 #include "settings.h"
 #include "touch.h"
 
@@ -143,6 +144,8 @@ void OnPlaceholderCreated(ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& d, ID3D
     g_placeholderSrgb = d.Format == DXGI_FORMAT_BC3_UNORM_SRGB;
     Logf("SCREEN our %ux%u texture created next to the game's placeholder %p (thread %lu)", nd.Width, nd.Height,
          static_cast<void*>(placeholder), GetCurrentThreadId());
+    FitReset("new screen texture");  // a new truck / reload: measure the display again
+    TouchResetScan();
 }
 
 // The game made a view of the placeholder: make the matching view of our texture.
@@ -543,17 +546,35 @@ using DrawIndexedInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UI
 DrawIndexedFn g_drawIndexed;
 DrawIndexedInstancedFn g_drawIndexedInstanced;
 
+// The display mesh is read once per screen (shape for the fit), and replayed for the mouse / orientation scan.
 void STDMETHODCALLTYPE HookDrawIndexed(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
-    if (!g_off && TouchNeedsReplay(ctx)) TouchReplay(ctx, [&] { g_drawIndexed(ctx, count, start, base); });
+    if (!g_off) {
+        if (TouchHasBindings() && FitNeedsGeometry() && TouchScreenBound(ctx)) FitCaptureGeometry(ctx, count, start, base);
+        if (TouchNeedsReplay(ctx)) TouchReplay(ctx, [&] { g_drawIndexed(ctx, count, start, base); });
+    }
     g_drawIndexed(ctx, count, start, base);
 }
 
 void STDMETHODCALLTYPE HookDrawIndexedInstanced(ID3D11DeviceContext* ctx, UINT count, UINT instances, UINT start, INT base,
                                                 UINT startInstance) {
-    if (!g_off && TouchNeedsReplay(ctx)) {
-        TouchReplay(ctx, [&] { g_drawIndexedInstanced(ctx, count, instances, start, base, startInstance); });
+    if (!g_off) {
+        if (TouchHasBindings() && FitNeedsGeometry() && TouchScreenBound(ctx)) FitCaptureGeometry(ctx, count, start, base);
+        if (TouchNeedsReplay(ctx)) {
+            TouchReplay(ctx, [&] { g_drawIndexedInstanced(ctx, count, instances, start, base, startInstance); });
+        }
     }
     g_drawIndexedInstanced(ctx, count, instances, start, base, startInstance);
+}
+
+using CreateInputLayoutFn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_INPUT_ELEMENT_DESC*, UINT, const void*,
+                                                        SIZE_T, ID3D11InputLayout**);
+CreateInputLayoutFn g_createInputLayout;
+
+HRESULT STDMETHODCALLTYPE HookCreateInputLayout(ID3D11Device* dev, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count,
+                                                const void* code, SIZE_T codeLen, ID3D11InputLayout** out) {
+    HRESULT hr = g_createInputLayout(dev, elements, count, code, codeLen, out);
+    if (SUCCEEDED(hr) && out && *out && !g_off) FitOnCreateInputLayout(*out, elements, count);  // remembered for the screen fit
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* pp) {
@@ -609,6 +630,7 @@ bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames, bool touch) {
     void* psSetSrv = vt(ctx)[8];
     void* drawIndexed = vt(ctx)[12];
     void* drawIndexedInstanced = vt(ctx)[20];
+    void* createInputLayout = vt(dev)[11];
     void* present1 = nullptr;
     IDXGISwapChain1* sc1 = nullptr;
     if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&sc1)))) {
@@ -639,10 +661,14 @@ bool D3D11HooksInstall(bool replaceTexture, bool uploadFrames, bool touch) {
          reinterpret_cast<void**>(&g_createSrv));
     hook("PSSetShaderResources", psSetSrv, reinterpret_cast<void*>(&HookPSSetSRV),
          reinterpret_cast<void**>(&g_psSetSrv));
-    if (touch) {  // draw hooks cost a little on every draw call, so only when the beta feature is on
+    if (touch || FitEnabled()) {  // draw hooks cost a little on every draw call, so only when they are needed
         hook("DrawIndexed", drawIndexed, reinterpret_cast<void*>(&HookDrawIndexed), reinterpret_cast<void**>(&g_drawIndexed));
         hook("DrawIndexedInstanced", drawIndexedInstanced, reinterpret_cast<void*>(&HookDrawIndexedInstanced),
              reinterpret_cast<void**>(&g_drawIndexedInstanced));
+    }
+    if (FitEnabled()) {
+        hook("CreateInputLayout", createInputLayout, reinterpret_cast<void*>(&HookCreateInputLayout),
+             reinterpret_cast<void**>(&g_createInputLayout));
     }
     if (!ok) return false;
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {

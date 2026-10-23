@@ -4,6 +4,7 @@
 #include "log.h"
 #include "media.h"
 #include "radio_tracker.h"
+#include "screen_fit.h"
 #include "settings.h"
 #include "station_logo.h"
 #include "text_util.h"
@@ -157,6 +158,7 @@ private:
               DWRITE_PARAGRAPH_ALIGNMENT palign = DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     void Fill(const D2D1_ROUNDED_RECT& r, D2D1_COLOR_F c);
     void Background(D2D1_COLOR_F accent);
+    void BackgroundFill(D2D1_COLOR_F accent);
     void SetCover(const CoverBytes& bytes, uint64_t key, bool isLogo = false);
     void DrawCover(float x, float y, float size);
     void DrawClock();
@@ -188,6 +190,10 @@ private:
     RadioSnapshot lastRadio_;
     std::chrono::steady_clock::time_point lastRadioTime_{};
     std::string lastCoverRequest_;
+
+    // Layout canvas (800x480) -> texture pixels: fitted to the real display, or simply filling the texture.
+    D2D1::Matrix3x2F uiTransform_ = D2D1::Matrix3x2F::Identity();
+    bool fitActive_ = false;
 
     // Soft transitions: new covers and new titles fade in instead of popping.
     double now_ = 0;
@@ -256,6 +262,13 @@ void Renderer::Fill(const D2D1_ROUNDED_RECT& r, D2D1_COLOR_F c) {
 }
 
 void Renderer::Background(D2D1_COLOR_F accent) {
+    // The background covers the whole texture, so it is drawn without the layout transform.
+    rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    BackgroundFill(accent);
+    rt_->SetTransform(uiTransform_);
+}
+
+void Renderer::BackgroundFill(D2D1_COLOR_F accent) {
     rt_->Clear(Rgb(0.04f, 0.045f, 0.055f));
     // Plain tinted gradient: the background without a cover, and what a new cover fades in over.
     D2D1_GRADIENT_STOP stops[2] = {{0.0f, Rgb(accent.r * 0.42f, accent.g * 0.42f, accent.b * 0.42f)},
@@ -366,7 +379,7 @@ void Renderer::DrawCover(float cx, float cy, float cs) {
 }
 
 void Renderer::DrawClock() {
-    Text(Clock(), kScreenWidth - 140, 22, 100, 28, 20, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f), false,
+    Text(Clock(), kCanvasWidth - 140, 22, 100, 28, 20, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.55f), false,
          DWRITE_TEXT_ALIGNMENT_TRAILING);
 }
 
@@ -615,9 +628,9 @@ void Renderer::DrawIdle(double t) {
     accent_.g = Lerp(accent_.g, target.g, 0.12f);
     accent_.b = Lerp(accent_.b, target.b, 0.12f);
     Background(accent_);
-    Text(Clock(), 0, 120, kScreenWidth, 150, 120, DWRITE_FONT_WEIGHT_LIGHT, Rgb(1, 1, 1, 0.92f), false,
+    Text(Clock(), 0, 120, kCanvasWidth, 150, 120, DWRITE_FONT_WEIGHT_LIGHT, Rgb(1, 1, 1, 0.92f), false,
          DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    Text(L"Nothing playing", 0, 290, kScreenWidth, 36, 22, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.45f), false,
+    Text(L"Nothing playing", 0, 290, kCanvasWidth, 36, 22, DWRITE_FONT_WEIGHT_NORMAL, Rgb(1, 1, 1, 0.45f), false,
          DWRITE_TEXT_ALIGNMENT_CENTER);
     (void)t;
 }
@@ -632,7 +645,7 @@ void Renderer::CopyOut() {
     lock->GetDataPointer(&size, &src);
     if (!src) return;
     const size_t row = static_cast<size_t>(kScreenWidth) * 4;
-    const bool flip = GetSettings().flipVertical;
+    const bool flip = GetSettings().flipVertical && !fitActive_;  // a valid fit already knows the orientation
     for (uint32_t y = 0; y < kScreenHeight; ++y) {
         uint32_t from = flip ? kScreenHeight - 1 - y : y;
         memcpy(&pixels_[y * row], src + static_cast<size_t>(from) * stride, row);
@@ -654,7 +667,17 @@ void Renderer::Frame(double t) {
                      (radio.connecting || now - lastRadioTime_ < std::chrono::milliseconds(GetSettings().radioHoldMs));
 
     rt_->BeginDraw();
-    rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    const ScreenFit fit = FitGet();
+    fitActive_ = fit.valid;
+    if (fit.valid) {
+        const double* m = fit.canvasToTexel;
+        uiTransform_ = D2D1::Matrix3x2F(static_cast<float>(m[0]), static_cast<float>(m[1]), static_cast<float>(m[2]),
+                                        static_cast<float>(m[3]), static_cast<float>(m[4]), static_cast<float>(m[5]));
+    } else {
+        uiTransform_ = D2D1::Matrix3x2F::Scale(static_cast<float>(kScreenWidth) / kCanvasWidth,
+                                               static_cast<float>(kScreenHeight) / kCanvasHeight);
+    }
+    rt_->SetTransform(uiTransform_);
     bool buttons = false;
     if (radio.active) DrawRadio(radio, t);
     else if (holdRadio) DrawRadio(lastRadio_, t);

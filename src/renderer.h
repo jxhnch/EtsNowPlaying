@@ -3,9 +3,12 @@
 
 namespace ep {
 
-// Size of the picture shown on the cabin screen.
-constexpr uint32_t kScreenWidth = 800;
-constexpr uint32_t kScreenHeight = 480;
+// The layout is designed on a canvas of 800x480 units. It is drawn into the screen texture, whose size is
+// kScreenWidth x kScreenHeight, through a transform that fits it onto the real shape of the truck's display.
+constexpr uint32_t kCanvasWidth = 800;
+constexpr uint32_t kCanvasHeight = 480;
+constexpr uint32_t kScreenWidth = 1024;
+constexpr uint32_t kScreenHeight = 640;
 
 struct FrameView {
     const uint8_t* data = nullptr;  // BGRA, premultiplied, opaque

@@ -3,6 +3,7 @@
 #include "log.h"
 #include "media.h"
 #include "renderer.h"
+#include "screen_fit.h"
 #include "settings.h"
 #include "touch_layout.h"
 
@@ -18,6 +19,8 @@ namespace {
 
 constexpr int kProbeW = 512, kProbeH = 256;  // probe texture: texel (i,j) holds ((i+.5)/W, (j+.5)/H, 1, 1)
 constexpr int kRing = 4;
+constexpr int kScanW = 128, kScanH = 96;  // coarse picture of the whole view: texture coordinates of the screen
+constexpr int kScanRing = 3;
 
 PsSetSrvFn g_psSet = nullptr;
 bool g_enabled = false;
@@ -35,6 +38,14 @@ ID3D11Texture2D* g_staging[kRing] = {};
 bool g_stagingPending[kRing] = {};
 ID3D11BlendState* g_noBlend = nullptr;
 ID3D11DepthStencilState* g_noDepth = nullptr;
+ID3D11Texture2D* g_scanRt = nullptr;
+ID3D11RenderTargetView* g_scanRtv = nullptr;
+ID3D11Texture2D* g_scanStaging[kScanRing] = {};
+bool g_scanPending[kScanRing] = {};
+int g_scanIndex = 0;
+bool g_scanDrawnThisFrame = false;
+ULONGLONG g_lastScanTick = 0;
+int g_scanLogged = 0;
 
 std::bitset<128> g_mask;  // slots of the immediate context that currently hold our screen view
 std::atomic<bool> g_maskAny{false};
@@ -113,6 +124,20 @@ bool CreateResources(ID3D11Device* dev) {
         if (FAILED(dev->CreateTexture2D(&st, nullptr, &s))) return false;
     }
 
+    // Coarse scan target (whole view, texture coordinates of the screen) and its read-back ring.
+    D3D11_TEXTURE2D_DESC sc = rd;
+    sc.Width = kScanW;
+    sc.Height = kScanH;
+    if (FAILED(dev->CreateTexture2D(&sc, nullptr, &g_scanRt)) || FAILED(dev->CreateRenderTargetView(g_scanRt, nullptr, &g_scanRtv))) {
+        return false;
+    }
+    sc.Usage = D3D11_USAGE_STAGING;
+    sc.BindFlags = 0;
+    sc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    for (auto& s : g_scanStaging) {
+        if (FAILED(dev->CreateTexture2D(&sc, nullptr, &s))) return false;
+    }
+
     // Fixed-function state for the probe pass: no blending, no depth test.
     D3D11_BLEND_DESC bd{};
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
@@ -169,10 +194,97 @@ void DecodeResult(const float* px) {
     }
     u = std::clamp(u, 0.0f, 1.0f);
     v = std::clamp(v, 0.0f, 1.0f);
-    g_state.x = u * kScreenWidth;
-    g_state.y = (GetSettings().flipVertical ? 1.0f - v : v) * kScreenHeight;
+    const ScreenFit fit = FitGet();
+    if (fit.valid) {  // texture coordinate -> texel -> layout canvas, through the inverse of the fit transform
+        const double tx = u * kScreenWidth, ty = v * kScreenHeight;
+        g_state.x = static_cast<float>(fit.texelToCanvas[0] * tx + fit.texelToCanvas[2] * ty + fit.texelToCanvas[4]);
+        g_state.y = static_cast<float>(fit.texelToCanvas[1] * tx + fit.texelToCanvas[3] * ty + fit.texelToCanvas[5]);
+    } else {
+        g_state.x = u * kCanvasWidth;
+        g_state.y = (GetSettings().flipVertical ? 1.0f - v : v) * kCanvasHeight;
+    }
     g_state.hover = true;
     g_hoverTick = GetTickCount64();
+}
+
+// Works out which way the screen's texture runs on the screen from the coarse scan: a least-squares plane through
+// u(x,y) and v(x,y) over all covered cells. The sign and dominant axis of the slopes give rotation and mirroring.
+void DecodeScan(const float* px, UINT rowPitchFloats) {
+    double n = 0, sx = 0, sy = 0, su = 0, sv = 0;
+    struct Cell { double x, y, u, v; };
+    std::vector<Cell> cells;
+    for (int y = 0; y < kScanH; ++y) {
+        for (int x = 0; x < kScanW; ++x) {
+            const float* p = px + static_cast<size_t>(y) * rowPitchFloats + static_cast<size_t>(x) * 4;
+            if (!(std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2])) || p[2] <= 1e-9f) continue;
+            double u = p[0] / p[2], v = p[1] / p[2];
+            if (u < -0.05 || u > 1.05 || v < -0.05 || v > 1.05) continue;
+            cells.push_back({static_cast<double>(x), static_cast<double>(y), u, v});
+            n += 1;
+            sx += x;
+            sy += y;
+            su += u;
+            sv += v;
+        }
+    }
+    ScreenOrientation o;
+    if (cells.size() < 24) {
+        if (g_scanLogged < 6) {
+            ++g_scanLogged;
+            Logf("FIT scan: only %zu covered cells, screen too small or not in view", cells.size());
+        }
+        return;
+    }
+    const double mx = sx / n, my = sy / n, mu = su / n, mv = sv / n;
+    double cxx = 0, cxy = 0, cyy = 0, cxu = 0, cyu = 0, cxv = 0, cyv = 0;
+    for (const Cell& c : cells) {
+        const double dx = c.x - mx, dy = c.y - my, du = c.u - mu, dv = c.v - mv;
+        cxx += dx * dx;
+        cxy += dx * dy;
+        cyy += dy * dy;
+        cxu += dx * du;
+        cyu += dy * du;
+        cxv += dx * dv;
+        cyv += dy * dv;
+    }
+    const double det = cxx * cyy - cxy * cxy;
+    if (det < 1e-6) return;
+    const double dudx = (cyy * cxu - cxy * cyu) / det, dudy = (cxx * cyu - cxy * cxu) / det;
+    const double dvdx = (cyy * cxv - cxy * cyv) / det, dvdy = (cxx * cyv - cxy * cxv) / det;
+
+    // Going right on the screen changes (u,v) by (dudx,dvdx); going up (= -y) by (-dudy,-dvdy).
+    const double rightU = dudx, rightV = dvdx, upU = -dudy, upV = -dvdy;
+    const bool rightIsU = std::fabs(rightU) >= std::fabs(rightV), upIsU = std::fabs(upU) >= std::fabs(upV);
+    const double rightMain = rightIsU ? rightU : rightV, rightOther = rightIsU ? rightV : rightU;
+    const double upMain = upIsU ? upU : upV, upOther = upIsU ? upV : upU;
+    const bool clear = std::fabs(rightMain) > 1.8 * std::fabs(rightOther) && std::fabs(upMain) > 1.8 * std::fabs(upOther) &&
+                       rightIsU != upIsU;
+    if (g_scanLogged < 12) {
+        ++g_scanLogged;
+        Logf("FIT scan: %zu cells, going right changes (u,v) by (%.4f,%.4f), going up by (%.4f,%.4f) per cell -> %s",
+             cells.size(), rightU, rightV, upU, upV, clear ? "clear" : "ambiguous, ignored");
+    }
+    if (!clear) return;
+    o.ok = true;
+    o.rightAxis = rightIsU ? 0 : 1;
+    o.rightSign = rightMain > 0 ? 1 : -1;
+    o.upAxis = upIsU ? 0 : 1;
+    o.upSign = upMain > 0 ? 1 : -1;
+    FitNoteOrientation(o);
+}
+
+void ReadScanBack(ID3D11DeviceContext* ctx) {
+    for (int i = 0; i < kScanRing; ++i) {
+        int slot = (g_scanIndex + i) % kScanRing;  // oldest first
+        if (!g_scanPending[slot]) continue;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        HRESULT hr = ctx->Map(g_scanStaging[slot], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING) break;
+        g_scanPending[slot] = false;
+        if (FAILED(hr)) continue;
+        DecodeScan(static_cast<const float*>(m.pData), m.RowPitch / sizeof(float));
+        ctx->Unmap(g_scanStaging[slot], 0);
+    }
 }
 
 void ReadBack(ID3D11DeviceContext* ctx) {
@@ -228,7 +340,7 @@ void TouchSetScreenView(ID3D11ShaderResourceView* ours) { g_ours = ours; }
 bool TouchHasBindings() { return g_maskAny.load(std::memory_order_relaxed); }
 
 void TouchNoteBind(ID3D11DeviceContext* ctx, UINT start, UINT count, const bool* isScreen) {
-    if (!g_enabled || ctx != g_imm) return;
+    if ((!g_enabled && !FitEnabled()) || ctx != g_imm) return;
     for (UINT i = 0; i < count; ++i) {
         UINT slot = start + i;
         if (slot < g_mask.size()) g_mask.set(slot, isScreen[i]);
@@ -236,13 +348,42 @@ void TouchNoteBind(ID3D11DeviceContext* ctx, UINT start, UINT count, const bool*
     g_maskAny.store(g_mask.any(), std::memory_order_relaxed);
 }
 
+namespace {
+bool WantsPixelProbe() { return g_enabled && g_cursor.inside; }
+bool WantsScan() {
+    return FitEnabled() && !g_scanDrawnThisFrame && GetTickCount64() - g_lastScanTick > 250 && FitNeedsOrientation();
+}
+}  // namespace
+
 bool TouchNeedsReplay(ID3D11DeviceContext* ctx) {
-    return g_enabled && !g_failed && !t_replaying && g_maskAny.load(std::memory_order_relaxed) && ctx == g_imm &&
-           g_cursor.inside && g_ours;
+    return (g_enabled || FitEnabled()) && !g_failed && !t_replaying && g_maskAny.load(std::memory_order_relaxed) &&
+           ctx == g_imm && g_ours && (WantsPixelProbe() || WantsScan());
+}
+
+bool TouchScreenBound(ID3D11DeviceContext* ctx) {
+    if (ctx != g_imm || !g_ours || !g_maskAny.load(std::memory_order_relaxed)) return false;
+    for (UINT s = 0; s < g_mask.size(); ++s) {
+        if (!g_mask.test(s)) continue;
+        ID3D11ShaderResourceView* cur = nullptr;
+        ctx->PSGetShaderResources(s, 1, &cur);
+        bool ok = cur == g_ours;
+        SafeRelease(cur);
+        if (ok) return true;
+    }
+    return false;
+}
+
+void TouchResetScan() {
+    for (auto& p : g_scanPending) p = false;
+    g_lastScanTick = 0;
+    g_scanLogged = 0;
 }
 
 void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce) {
     if (!EnsureResources(ctx)) return;
+    const bool doPixel = WantsPixelProbe();
+    const bool doScan = WantsScan();
+    if (!doPixel && !doScan) return;
 
     // Slots that really hold our view right now (the bookkeeping can be stale after ClearState etc.).
     UINT slots[8];
@@ -294,35 +435,52 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
     }
 
     if (nvp > 0 && rtW > 0 && rtH > 0) {
-        float px = std::floor(g_cursor.x * rtW / g_cursor.w);
-        float py = std::floor(g_cursor.y * rtH / g_cursor.h);
-        g_lastPixelX = px;
-        g_lastPixelY = py;
-        g_lastRtW = rtW;
-        g_lastRtH = rtH;
-
         t_replaying = true;
         const FLOAT zero[4] = {0, 0, 0, 0};
-        if (!g_clearedThisFrame) {
-            ctx->ClearRenderTargetView(g_rtv, zero);
-            g_clearedThisFrame = true;
-        }
-        ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
         ctx->OMSetBlendState(g_noBlend, nullptr, 0xFFFFFFFF);
         ctx->OMSetDepthStencilState(g_noDepth, 0);
-        // Shift the viewport so that the mouse pixel lands on pixel (0,0) of the 1x1 target.
-        D3D11_VIEWPORT vp = vps[0];
-        vp.TopLeftX -= px;
-        vp.TopLeftY -= py;
-        ctx->RSSetViewports(1, &vp);
-        D3D11_RECT sc{0, 0, 1, 1};
-        ctx->RSSetScissorRects(1, &sc);
         for (int i = 0; i < nSlots; ++i) g_psSet(ctx, slots[i], 1, &g_probeSrv);
 
-        drawOnce();
-        g_replayedThisFrame = true;
-        ++g_replays;
-        if (g_replays == 1) Logf("TOUCH first probe draw (cursor pixel %.0f,%.0f in a %.0fx%.0f target)", px, py, rtW, rtH);
+        if (doPixel) {
+            float px = std::floor(g_cursor.x * rtW / g_cursor.w);
+            float py = std::floor(g_cursor.y * rtH / g_cursor.h);
+            g_lastPixelX = px;
+            g_lastPixelY = py;
+            g_lastRtW = rtW;
+            g_lastRtH = rtH;
+            if (!g_clearedThisFrame) {
+                ctx->ClearRenderTargetView(g_rtv, zero);
+                g_clearedThisFrame = true;
+            }
+            ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
+            // Shift the viewport so that the mouse pixel lands on pixel (0,0) of the 1x1 target.
+            D3D11_VIEWPORT vp = vps[0];
+            vp.TopLeftX -= px;
+            vp.TopLeftY -= py;
+            ctx->RSSetViewports(1, &vp);
+            D3D11_RECT sc{0, 0, 1, 1};
+            ctx->RSSetScissorRects(1, &sc);
+            drawOnce();
+            g_replayedThisFrame = true;
+            ++g_replays;
+            if (g_replays == 1) Logf("TOUCH first probe draw (cursor pixel %.0f,%.0f in a %.0fx%.0f target)", px, py, rtW, rtH);
+        }
+        if (doScan) {
+            // The whole view squeezed into a small target: every pixel of the screen shows its texture coordinates.
+            ctx->ClearRenderTargetView(g_scanRtv, zero);
+            ctx->OMSetRenderTargets(1, &g_scanRtv, nullptr);
+            D3D11_VIEWPORT vp = vps[0];
+            vp.TopLeftX = 0;
+            vp.TopLeftY = 0;
+            vp.Width = static_cast<float>(kScanW);
+            vp.Height = static_cast<float>(kScanH);
+            ctx->RSSetViewports(1, &vp);
+            D3D11_RECT sc{0, 0, kScanW, kScanH};
+            ctx->RSSetScissorRects(1, &sc);
+            drawOnce();
+            g_scanDrawnThisFrame = true;
+            g_lastScanTick = GetTickCount64();
+        }
 
         for (int i = 0; i < nSlots; ++i) g_psSet(ctx, slots[i], 1, &g_ours);
         t_replaying = false;
@@ -341,7 +499,7 @@ void TouchReplay(ID3D11DeviceContext* ctx, const std::function<void()>& drawOnce
 }
 
 void TouchOnPresent(IDXGISwapChain* sc) {
-    if (!g_enabled || g_failed) return;
+    if ((!g_enabled && !FitEnabled()) || g_failed) return;
 
     ID3D11Device* dev = nullptr;
     if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev))) || !dev) return;
@@ -383,8 +541,20 @@ void TouchOnPresent(IDXGISwapChain* sc) {
             }
         }
     }
+    if (g_scanRt) {
+        ReadScanBack(g_imm);
+        if (g_scanDrawnThisFrame) {
+            int slot = g_scanIndex % kScanRing;
+            if (!g_scanPending[slot]) {
+                g_imm->CopyResource(g_scanStaging[slot], g_scanRt);
+                g_scanPending[slot] = true;
+                g_scanIndex = (g_scanIndex + 1) % kScanRing;
+            }
+        }
+    }
     g_replayedThisFrame = false;
     g_clearedThisFrame = false;
+    g_scanDrawnThisFrame = false;
 
     // A short status line every 10 s while the screen is in use, so a report shows what the plugin saw.
     if (g_replays > 0 && GetTickCount64() - g_lastStats > 10000) {

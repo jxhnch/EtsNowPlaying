@@ -11,6 +11,7 @@
 #include "station_logo.h"
 #include "safe_mode.h"
 #include "screen_assets.h"
+#include "screen_fit.h"
 #include "settings.h"
 #include "version.h"
 
@@ -74,6 +75,7 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
         ep::RadioTrackerInit();
         bool net = ep::NetHooksInstall();
         bool engine = features.screen && ep::EngineHooksInstall("/home/EtsNowPlaying/gps.tobj", features.disableGameGps);
+        ep::FitInit(features.screen && features.touch && ep::GetSettings().autoFit);
         bool gfx = ep::D3D11HooksInstall(features.screen, features.upload, features.touch && ep::GetSettings().touch);
         ep::MediaStart();
         ep::CoverLookupStart();
