@@ -90,6 +90,11 @@ void Run() {
         std::string trackKey;
         double seekTarget = 0;  // after a seek the player takes a moment to report the new position: show ours meanwhile
         auto seekTime = std::chrono::steady_clock::now() - std::chrono::hours(1);
+        // After a play/pause click the player can take a while to report the new state: show the expected one meanwhile.
+        bool holdPlaying = false, heldValue = false;
+        auto holdUntil = std::chrono::steady_clock::now();
+        bool lastPlaying = false;
+        auto fastPollUntil = std::chrono::steady_clock::now();
         int coverTries = 0;
         int tick = 0;
         while (!g_stop) {
@@ -102,6 +107,12 @@ void Run() {
                     else if (command == MediaCommand::Next) ok = session.TrySkipNextAsync().get();
                     else if (command == MediaCommand::Previous) ok = session.TrySkipPreviousAsync().get();
                     Logf("MEDIA command %d -> %s", static_cast<int>(command), ok ? "ok" : "refused by the player");
+                    fastPollUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                    if (ok && command == MediaCommand::PlayPause) {
+                        holdPlaying = true;
+                        heldValue = !lastPlaying;  // the state flips
+                        holdUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+                    }
                 }
                 const double seek = g_pendingSeek.exchange(-1.0);
                 if (session && seek >= 0) {
@@ -133,6 +144,14 @@ void Run() {
                     next.artist = Utf8(props.Artist());
                     next.album = Utf8(props.AlbumTitle());
                     next.playing = info.PlaybackStatus() == Status::Playing;
+                    if (holdPlaying) {
+                        if (next.playing == heldValue || std::chrono::steady_clock::now() > holdUntil) holdPlaying = false;
+                        else next.playing = heldValue;
+                    }
+                    if (next.playing != lastPlaying) {
+                        lastPlaying = next.playing;
+                        Logf("MEDIA playback state: %s", next.playing ? "playing" : "paused");
+                    }
                     next.duration = std::chrono::duration<double>(tl.EndTime() - tl.StartTime()).count();
 
                     double raw = std::chrono::duration<double>(tl.Position()).count();
@@ -181,8 +200,9 @@ void Run() {
                 Logf("MEDIA poll failed: 0x%08x", static_cast<unsigned>(e.code().value));
             }
             ++tick;
-            // Poll twice a second, but react to a button press within ~50 ms.
-            for (int i = 0; i < 10 && !g_stop && g_pendingCommand.load() == static_cast<int>(MediaCommand::None) && g_pendingSeek.load() < 0;
+            // Poll twice a second (five times a second right after a click), but react to a button press within ~50 ms.
+            const int steps = std::chrono::steady_clock::now() < fastPollUntil ? 3 : 10;
+            for (int i = 0; i < steps && !g_stop && g_pendingCommand.load() == static_cast<int>(MediaCommand::None) && g_pendingSeek.load() < 0;
                  ++i) {
                 Sleep(50);
             }

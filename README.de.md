@@ -86,6 +86,10 @@ Sender läuft; diese Adresse sieht deine IP-Adresse wie jede Webseite. `extra_so
 
 Das Plugin schreibt `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\diag.log`. Wenn du ein Problem meldest, hänge sie bitte an.
 
+**Nach einem Spiel-Update:** Eine neue Spielversion kann etwas verschieben, worauf das Plugin sich stützt. Dann lässt das Plugin das
+normale GPS des Spiels in Ruhe (oder schaltet es wieder ein) und sagt es dir mit einem kleinen Fenster (einmal pro Spielversion). Schau auf der [Releases](../../releases)-Seite nach einem Plugin-Update; gibt es noch keins, eröffne bitte ein Issue und
+hänge die Log-Datei an.
+
 ## Selbst bauen
 
 Du brauchst die Visual Studio 2022 Build Tools (C++). `build.bat` ausführen; das Plugin ist `build\EtsNowPlaying.dll`.

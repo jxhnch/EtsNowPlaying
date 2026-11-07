@@ -23,23 +23,23 @@ Features SafeModeBegin(const std::wstring& dir) {
     g_statePath = dir + L"\\state.ini";
     std::wstring ini = dir + L"\\EtsNowPlaying.ini";  // created by LoadSettings
 
-    int stage = static_cast<int>(GetPrivateProfileIntW(L"state", L"stage", 0, g_statePath.c_str()));
+    // A game crash does not switch anything off any more: it was often not caused by the plugin at all (other mods,
+    // the multiplayer client, the driver), and the plugin silently losing features after it was worse than the crash.
+    // It is only noted in the log. The stages below stay available as a developer switch ([features] force_stage).
     int running = static_cast<int>(GetPrivateProfileIntW(L"state", L"running", 0, g_statePath.c_str()));
     int forced = static_cast<int>(GetPrivateProfileIntW(L"features", L"force_stage", -1, ini.c_str()));
 
     constexpr int kLastStage = 4;
+    int stage = 0;
     if (forced >= 0) {
         stage = forced > kLastStage ? kLastStage : forced;
         Logf("SAFE stage forced to %d by EtsNowPlaying.ini", stage);
     } else if (running) {
-        stage = stage < kLastStage ? stage + 1 : kLastStage;
-        Logf("SAFE the previous run did not end cleanly (game crash?) -> stage %d", stage);
-    } else {
-        Logf("SAFE previous run ended cleanly, stage %d", stage);
+        Logf("SAFE the previous run did not end cleanly (game crash, or the game was closed hard); nothing is switched off because of that");
     }
     WriteState(stage, 1);
 
-    // After a crash the newest and most invasive part goes first: touch input, then frame upload, then the
+    // Developer stages: the newest and most invasive part goes first: touch input, then frame upload, then the
     // game's own GPS UI patch, finally the whole screen.
     Features f;
     f.stage = stage;
