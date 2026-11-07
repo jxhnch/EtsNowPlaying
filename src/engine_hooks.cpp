@@ -34,6 +34,8 @@ size_t g_overrideLen = 0;
 uint8_t* g_gpsJump = nullptr;
 std::atomic<bool> g_gpsPatched{false};
 std::atomic<int> g_rewrites{0};
+std::atomic<bool> g_observeOnly{false};  // count GPS lookups, redirect nothing
+std::atomic<int> g_gpsSightings{0};
 
 bool SafeStringEquals(const char* p, const char* expected) {
     __try {
@@ -91,6 +93,8 @@ int RewriteQueued(uint8_t* self) {
             char* path = *reinterpret_cast<char**>(request + 0x40);
             if (path) NotePath(path);
             if (!path || strcmp(path, kGameGpsPath) != 0) continue;
+            g_gpsSightings.fetch_add(1);
+            if (g_observeOnly) continue;
             // Our path is not longer than the original, so it fits into the existing buffer.
             memcpy(path, g_override, g_overrideLen + 1);
             *reinterpret_cast<int*>(request + 0x48) = static_cast<int>(g_overrideLen);
@@ -153,9 +157,12 @@ void* __fastcall HookLoad(void* self, void* out, const char** path, void* opts, 
             if (p) {
                 if (g_loadCalls.fetch_add(1) < 3) strncpy_s(shown, p, _TRUNCATE);
                 if (strcmp(p, kGameGpsPath) == 0) {
-                    saved = p;
-                    *path = g_override;
-                    swapped = true;
+                    g_gpsSightings.fetch_add(1);
+                    if (!g_observeOnly) {
+                        saved = p;
+                        *path = g_override;
+                        swapped = true;
+                    }
                 }
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -251,16 +258,25 @@ void EngineDisableGameGps() {
     Logf("ENGINE game GPS window switched off");
 }
 
-void EngineHooksDisable() {
-    g_off = true;
+void EngineRestoreGameGps() {
     if (g_gpsJump && g_gpsPatched.exchange(false)) {
         DWORD old = 0;
         if (VirtualProtect(g_gpsJump, 2, PAGE_EXECUTE_READWRITE, &old)) {
             _InterlockedExchange16(reinterpret_cast<short*>(g_gpsJump), static_cast<short>(0x840F));
             VirtualProtect(g_gpsJump, 2, old, &old);
             FlushInstructionCache(GetCurrentProcess(), g_gpsJump, 2);
+            Logf("ENGINE game GPS window switched back on");
         }
     }
 }
+
+void EngineHooksDisable() {
+    g_off = true;
+    EngineRestoreGameGps();
+}
+
+void EngineSetObserveOnly(bool on) { g_observeOnly = on; }
+int EngineRedirects() { return g_rewrites.load() + g_loadRedirects.load(); }
+int EngineGpsSightings() { return g_gpsSightings.load(); }
 
 }  // namespace ep

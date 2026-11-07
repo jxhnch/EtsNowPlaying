@@ -13,4 +13,12 @@ void EngineHooksDisable();
 // Stops the game from drawing its own GPS UI (done at install time when requested).
 void EngineDisableGameGps();
 
+// Puts the game's own GPS UI back (takes effect the next time a cabin is built).
+void EngineRestoreGameGps();
+
+// Observe-only: the hooks count lookups of the GPS texture but redirect nothing (used while a game version is flagged).
+void EngineSetObserveOnly(bool on);
+int EngineRedirects();      // GPS lookups redirected to our placeholder in this session
+int EngineGpsSightings();  // GPS lookups seen, redirected or not
+
 }  // namespace ep
