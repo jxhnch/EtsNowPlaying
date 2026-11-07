@@ -12,6 +12,7 @@ struct Settings {
     int radioHoldMs = 600;          // [radio] switch_hold_ms: keep the radio screen this long after a stream ends
     bool touch = true;              // [touch] enabled: click the buttons on the screen with the mouse
     int autoFit = 1;                // [screen] auto_fit: 0 off, 1 fit the picture to each truck's display, 2 measure only
+    bool extraSources = true;       // [radio] extra_sources: use the optional EtsNowPlaying.sources.ini
     bool textureFinder = false;     // [debug] texture_finder: developer tool (Ctrl+Shift+F6..F9), not in the default ini
 };
 

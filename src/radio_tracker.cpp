@@ -1,5 +1,6 @@
 #include "radio_tracker.h"
 
+#include "extra_sources.h"
 #include "log.h"
 #include "settings.h"
 #include "station_db.h"
@@ -401,6 +402,7 @@ RadioSnapshot RadioGetSnapshot() {
             break;
         }
     }
+    ExtraSourcesApply(s);  // optional sources file: the song for stations whose stream only sends the show name
     return s;
 }
 

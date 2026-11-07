@@ -25,6 +25,7 @@ add_library(EtsNowPlaying SHARED
     src/screen_fit.cpp
     src/net_hooks.cpp
     src/radio_tracker.cpp
+    src/extra_sources.cpp
     src/station_db.cpp
     src/media.cpp
     src/settings.cpp

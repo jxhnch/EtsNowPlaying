@@ -3,6 +3,7 @@
 #include "cover_lookup.h"
 #include "d3d11_hooks.h"
 #include "engine_hooks.h"
+#include "extra_sources.h"
 #include "log.h"
 #include "media.h"
 #include "net_hooks.h"
@@ -79,6 +80,7 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
         bool gfx = ep::D3D11HooksInstall(features.screen, features.upload, features.touch && ep::GetSettings().touch);
         ep::MediaStart();
         ep::CoverLookupStart();
+        ep::ExtraSourcesStart();
         ep::StationLogoStart();
         ep::RendererStart();
         ep::Logf("init done: net=%d engine=%d d3d11=%d", net, engine, gfx);
@@ -95,6 +97,7 @@ extern "C" SCSAPI_VOID scs_telemetry_shutdown(void) {
     ep::EngineHooksDisable();
     ep::D3D11HooksDisable();
     ep::RendererStop();
+    ep::ExtraSourcesStop();
     ep::StationLogoStop();
     ep::CoverLookupStop();
     ep::MediaStop();

@@ -47,6 +47,9 @@ void LoadSettings(const std::wstring& dir) {
                 "[radio]\r\n"
                 "; 1 = look up song covers and station logos online (iTunes, Deezer, radio-browser.info). 0 = off.\r\n"
                 "cover_lookup=1\r\n"
+                "; 1 = use the optional file EtsNowPlaying.sources.ini (extra song sources for stations that only send a show name).\r\n"
+                "; 0 = never use it.\r\n"
+                "extra_sources=1\r\n"
                 "\r\n"
                 "[touch]\r\n"
                 "; 1 = the buttons on the screen can be clicked with the mouse.\r\n"
@@ -60,6 +63,7 @@ void LoadSettings(const std::wstring& dir) {
     EnsureKey(ini, L"screen", L"auto_fit", L"1");
     EnsureKey(ini, L"media", L"app_filter", L"spotify");
     EnsureKey(ini, L"radio", L"cover_lookup", L"1");
+    EnsureKey(ini, L"radio", L"extra_sources", L"1");
     EnsureKey(ini, L"touch", L"enabled", L"1");
     WritePrivateProfileStringW(L"beta", L"touch", nullptr, ini.c_str());
     WritePrivateProfileStringW(L"radio", L"stale_ms", nullptr, ini.c_str());
@@ -72,6 +76,7 @@ void LoadSettings(const std::wstring& dir) {
     g_settings.coverLookup = GetPrivateProfileIntW(L"radio", L"cover_lookup", 1, ini.c_str()) != 0;
     g_settings.radioStaleMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"pause_after_ms", 2500, ini.c_str()));
     g_settings.radioHoldMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"switch_hold_ms", 600, ini.c_str()));
+    g_settings.extraSources = GetPrivateProfileIntW(L"radio", L"extra_sources", 1, ini.c_str()) != 0;
     g_settings.touch = GetPrivateProfileIntW(L"touch", L"enabled", 1, ini.c_str()) != 0;
     g_settings.textureFinder = GetPrivateProfileIntW(L"debug", L"texture_finder", 0, ini.c_str()) != 0;
     g_settings.autoFit = static_cast<int>(GetPrivateProfileIntW(L"screen", L"auto_fit", 1, ini.c_str()));

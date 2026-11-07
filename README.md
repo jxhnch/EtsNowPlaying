@@ -51,12 +51,36 @@ Remove other plugins that change the GPS screen first, they would get in each ot
 | `[screen] auto_fit` | `1` | Fit the picture to each vehicle's display. `0` = off. |
 | `[media] app_filter` | `spotify` | Only show this app. Empty = any media player. |
 | `[radio] cover_lookup` | `1` | Look up song covers and station logos online. `0` = off. |
+| `[radio] extra_sources` | `1` | Use the optional file `EtsNowPlaying.sources.ini` (see below). `0` = never. |
 | `[touch] enabled` | `1` | Mouse buttons on the screen. `0` = off. |
+
+## Optional: extra song sources
+
+A few stations only send the name of a *show* in their stream, not the song (Real Hardstyle Radio does this during its shows).
+If such a station also offers the current song on a web address, it can be listed in
+`Documents\Euro Truck Simulator 2\EtsNowPlaying\EtsNowPlaying.sources.ini`. The plugin creates this file on the first start,
+**it is optional** and comes with one entry for Real Hardstyle Radio. For every entry you say how to recognise the station
+(`match`), where to ask (`url`) and where the song is inside the answer (`title`, optionally `artist`):
+
+```ini
+[Real Hardstyle]
+enabled=1
+match=realhardstyle|real hardstyle
+url=https://api.realhardstyle.com/get/nowplaying
+title=response.activeSession.rawTitle
+interval=10
+```
+
+The plugin asks that address only while the station is playing (every 10 seconds by default). If the address gives no song,
+or cannot be reached, the title from the stream is shown as usual. Set `enabled=0` for an entry, or `extra_sources=0` in the
+INI to switch it all off.
 
 ## Privacy
 
 No tracking, no accounts. With `cover_lookup=1` the plugin sends the current radio *title* and the *station name*
 to iTunes, Deezer and radio-browser.info to find a cover or logo. Nothing else leaves your PC. Set it to `0` to switch this off.
+The optional sources file (see above) makes the plugin also ask the listed web address while that station plays; that
+address sees your IP address like any website. `extra_sources=0` switches this off.
 
 ## Something wrong?
 
@@ -80,7 +104,10 @@ radio stream and the Windows media controls on your PC. With `[radio] cover_look
 song title and the station name** to **iTunes Search (Apple), Deezer and radio-browser.info** to find a cover or logo; like any web
 request, these services see your IP address. Nothing else is sent: no personal data, no game data, no Spotify data. Set
 `cover_lookup=0` to switch off all online requests. Logos are cached in `Documents\Euro Truck Simulator 2\EtsNowPlaying\logos`,
-and `diag.log` stays on your PC unless you send it yourself.
+and `diag.log` stays on your PC unless you send it yourself. If an entry of the optional file `EtsNowPlaying.sources.ini` is
+enabled (one for Real Hardstyle Radio is included), the plugin also requests the web address listed there every few seconds, but only
+while that station is playing; the request contains no data about you, and the server sees your IP address. Set
+`[radio] extra_sources=0` or `enabled=0` to switch this off.
 
 **Terms.** Free software under the [MIT License](LICENSE), provided "as is" without warranty. The plugin changes game code in
 memory: use it at your own risk and follow the rules of the servers you play on (e.g. TruckersMP). Covers and logos belong to their
