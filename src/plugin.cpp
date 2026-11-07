@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include <MinHook.h>
+#include <thread>
 #include <shlobj.h>
 
 namespace {
@@ -57,6 +58,12 @@ bool g_decided = false;
 bool g_observe = false;
 ULONGLONG g_lastCheck = 0;
 
+// What the player is told. Nobody reads the game console, so it is a small pop-up window (shown from its own thread, the
+// game keeps running). The "not supported" one comes once per game + plugin version, not at every start.
+enum class Notice { None, Unsupported, WorksAgain };
+Notice g_notice = Notice::None;
+bool g_noticeShown = false;
+
 std::wstring StatePath() { return g_dir + L"\\state.ini"; }
 
 bool CompatFlagged() {
@@ -77,24 +84,77 @@ void CompatSet(bool failed) {
     WritePrivateProfileStringW(L"compat", L"failed", L"1", StatePath().c_str());
 }
 
+bool NoticeAlreadyGiven() {
+    wchar_t game[256] = {}, plugin[64] = {};
+    GetPrivateProfileStringW(L"compat", L"game", L"", game, 256, StatePath().c_str());
+    GetPrivateProfileStringW(L"compat", L"plugin", L"", plugin, 64, StatePath().c_str());
+    return GetPrivateProfileIntW(L"compat", L"noticed", 0, StatePath().c_str()) != 0 && ep::ToWide(g_gameName) == game &&
+           ep::ToWide(ETSNP_VERSION) == plugin;
+}
+
+void MarkNoticed() {
+    WritePrivateProfileStringW(L"compat", L"game", ep::ToWide(g_gameName).c_str(), StatePath().c_str());
+    WritePrivateProfileStringW(L"compat", L"plugin", ep::ToWide(ETSNP_VERSION).c_str(), StatePath().c_str());
+    WritePrivateProfileStringW(L"compat", L"noticed", L"1", StatePath().c_str());
+}
+
 void WarnUnsupported() {
     const std::string msg = std::string("[EtsNowPlaying] Plugin ") + ETSNP_VERSION + " does not support this game version (" + g_gameName +
                             ") yet, the normal GPS is used. Please look for an update: " + kGithub;
     GameLog(SCS_LOG_TYPE_warning, msg.c_str());
+    if (g_notice == Notice::None) g_notice = Notice::Unsupported;
+}
+
+void ShowNotice(Notice kind) {
+    const bool german = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN;
+    std::wstring text;
+    if (kind == Notice::Unsupported) {
+        const std::wstring game = ep::ToWide(g_gameName), url = ep::ToWide(std::string(kGithub) + "/releases");
+        text = german ? L"EtsNowPlaying unterstützt diese Spielversion noch nicht (" + game +
+                            L").\n\nDein normales GPS bleibt in Benutzung, sonst ist nichts beeinträchtigt.\n"
+                            L"Ein Plugin-Update gibt es hier:\n" + url
+                      : L"EtsNowPlaying does not support this version of the game yet (" + game +
+                            L").\n\nYour normal GPS stays in use, nothing else is affected.\n"
+                            L"A plugin update will appear here:\n" + url;
+    } else {
+        text = german ? L"EtsNowPlaying funktioniert mit dieser Spielversion wieder.\n\nBitte starte das Spiel einmal neu."
+                      : L"EtsNowPlaying works with this game version again.\n\nPlease restart the game once.";
+    }
+    // Own thread: MessageBox only blocks that thread, the game keeps running.
+    std::thread([text] {
+        MessageBoxW(nullptr, text.c_str(), L"EtsNowPlaying", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+    }).detach();
+}
+
+// Shows a pending notice once the player is really in the game (the truck was loaded a few seconds ago).
+void ProcessNotice(ULONGLONG now) {
+    if (g_notice == Notice::None || g_noticeShown) return;
+    if (g_notice == Notice::Unsupported) {
+        const ULONGLONG truck = g_truckTick.load();
+        if (!truck || now - truck < 8000) return;
+        g_noticeShown = true;
+        if (NoticeAlreadyGiven()) return;
+        MarkNoticed();
+    }
+    g_noticeShown = true;
+    ShowNotice(g_notice);
 }
 
 // Called once per frame (game thread), cheap once the decision is made.
 void WatchTick() {
-    if (g_decided) return;
     const ULONGLONG now = GetTickCount64();
     if (now - g_lastCheck < 1000) return;
     g_lastCheck = now;
+    ProcessNotice(now);
+    if (g_decided) return;
     if (g_observe) {
         if (ep::EngineGpsSightings() > 0) {
             g_decided = true;
             CompatSet(false);
             ep::Logf("COMPAT the GPS texture lookup was seen again: this game version works with this plugin, mark removed");
             GameLog(SCS_LOG_TYPE_message, "[EtsNowPlaying] This game version works with the plugin again. Please restart the game once.");
+            g_notice = Notice::WorksAgain;
+            g_noticeShown = false;
         }
         return;
     }
@@ -180,7 +240,7 @@ extern "C" SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version,
         ep::RendererStart();
         ep::Logf("init done: net=%d engine=%d d3d11=%d", net, engine, gfx);
         GameLog(SCS_LOG_TYPE_message, "[EtsNowPlaying] started, see Documents\\...\\EtsNowPlaying\\diag.log");
-        if (engine && p->register_for_event) {
+        if (p->register_for_event) {
             p->register_for_event(SCS_TELEMETRY_EVENT_configuration, OnConfiguration, nullptr);
             p->register_for_event(SCS_TELEMETRY_EVENT_frame_end, OnFrameEnd, nullptr);
         }

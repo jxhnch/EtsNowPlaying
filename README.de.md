@@ -63,8 +63,7 @@ iTunes, Deezer und radio-browser.info, um ein Cover oder Logo zu finden. Sonst v
 Das Plugin schreibt `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\diag.log`. Wenn du ein Problem meldest, hänge sie bitte an.
 
 **Nach einem Spiel-Update:** Eine neue Spielversion kann etwas verschieben, worauf das Plugin sich stützt. Dann lässt das Plugin das
-normale GPS des Spiels in Ruhe (oder schaltet es wieder ein) und sagt das in der Konsole des Spiels: „does not support this game
-version yet“. Schau auf der [Releases](../../releases)-Seite nach einem Plugin-Update; gibt es noch keins, eröffne bitte ein Issue und
+normale GPS des Spiels in Ruhe (oder schaltet es wieder ein) und sagt es dir mit einem kleinen Fenster (einmal pro Spielversion). Schau auf der [Releases](../../releases)-Seite nach einem Plugin-Update; gibt es noch keins, eröffne bitte ein Issue und
 hänge die Log-Datei an.
 
 ## Selbst bauen
