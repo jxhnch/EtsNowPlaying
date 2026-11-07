@@ -43,6 +43,42 @@ bool SafeStringEquals(const char* p, const char* expected) {
     }
 }
 
+// Diagnosis for game updates: which paths pass through the queue? (a few, and everything that mentions "gps")
+struct SeenPath {
+    char text[200];
+};
+thread_local SeenPath g_pending[6];
+thread_local int g_pendingCount = 0;
+uint64_t g_seenHashes[256];
+int g_seenCount = 0;
+std::atomic<int> g_requestsSeen{0};
+
+bool Interesting(const char* path) {
+    char lower[200];
+    size_t i = 0;
+    for (; path[i] && i < sizeof(lower) - 1; ++i) lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(path[i])));
+    lower[i] = 0;
+    return strstr(lower, "gps") != nullptr;
+}
+
+// Called with the queue lock held: only remembers, the logging happens after the lock is released.
+void NotePath(const char* path) {
+    const int seen = g_requestsSeen.fetch_add(1);
+    uint64_t h = 1469598103934665603ull;
+    for (const char* p = path; *p; ++p) {
+        h ^= static_cast<unsigned char>(*p);
+        h *= 1099511628211ull;
+    }
+    if (!(seen < 5 || Interesting(path))) return;
+    for (int i = 0; i < g_seenCount; ++i) {
+        if (g_seenHashes[i] == h) return;
+    }
+    if (g_seenCount >= 256 || g_pendingCount >= 6) return;
+    g_seenHashes[g_seenCount++] = h;
+    strncpy_s(g_pending[g_pendingCount].text, path, _TRUNCATE);
+    ++g_pendingCount;
+}
+
 // Rewrites queued requests for the game's GPS texture. Runs with the queue's spin lock held.
 int RewriteQueued(uint8_t* self) {
     int n = 0;
@@ -53,6 +89,7 @@ int RewriteQueued(uint8_t* self) {
             uint8_t* request = *reinterpret_cast<uint8_t**>(node + 0x10);
             if (!request) continue;
             char* path = *reinterpret_cast<char**>(request + 0x40);
+            if (path) NotePath(path);
             if (!path || strcmp(path, kGameGpsPath) != 0) continue;
             // Our path is not longer than the original, so it fits into the existing buffer.
             memcpy(path, g_override, g_overrideLen + 1);
@@ -78,8 +115,10 @@ uint64_t __fastcall HookQueue(void* self) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         if (locked) {
+            g_pendingCount = 0;
             int n = RewriteQueued(static_cast<uint8_t*>(self));
             _InterlockedExchange8(const_cast<char*>(lock), 0);
+            for (int i = 0; i < g_pendingCount; ++i) Logf("ENGINE queue: texture request '%s'", g_pending[i].text);
             if (n > 0) {
                 int total = g_rewrites.fetch_add(n) + n;
                 Logf("ENGINE redirected %d texture request(s) for the cabin GPS to '%s' (total %d)", n, g_override, total);
@@ -89,6 +128,51 @@ uint64_t __fastcall HookQueue(void* self) {
         }
     }
     return g_origQueue(self);
+}
+
+// The resource manager's "find or load" entry: (manager, out, const char** path, u64* options, u64 flags). It builds the
+// cache key "<path>.<options>" and only queues a load if that key is not cached yet. A texture that is already resident
+// never reaches the queue, so the redirect also has to happen here: the path is swapped for the duration of the call
+// (the caller's own string is not touched), which makes the manager look up and load our placeholder instead.
+const char* kLoadSignature =
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC ?? ?? ?? ?? F6 84 24 ?? ?? ?? ?? 01 4D 8B E9 "
+    "49 8B D8";
+
+using LoadFn = void*(__fastcall*)(void*, void*, const char**, void*, uint64_t);
+LoadFn g_origLoad = nullptr;
+std::atomic<int> g_loadRedirects{0};
+std::atomic<int> g_loadCalls{0};
+
+void* __fastcall HookLoad(void* self, void* out, const char** path, void* opts, uint64_t flags) {
+    const char* saved = nullptr;
+    bool swapped = false;
+    if (!g_off && path) {
+        char shown[160] = {};
+        __try {
+            const char* p = *path;
+            if (p) {
+                if (g_loadCalls.fetch_add(1) < 3) strncpy_s(shown, p, _TRUNCATE);
+                if (strcmp(p, kGameGpsPath) == 0) {
+                    saved = p;
+                    *path = g_override;
+                    swapped = true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            swapped = false;
+        }
+        if (shown[0]) Logf("ENGINE load request seen: '%s'", shown);
+    }
+    void* result = g_origLoad(self, out, path, opts, flags);
+    if (swapped) {
+        __try {
+            *path = saved;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        const int n = g_loadRedirects.fetch_add(1) + 1;
+        if (n <= 5) Logf("ENGINE redirected a lookup of the cabin GPS texture to '%s' (total %d)", g_override, n);
+    }
+    return result;
 }
 
 }  // namespace
@@ -133,7 +217,19 @@ bool EngineHooksInstall(const char* overridePath, bool disableGameGps) {
         Logf("ENGINE enable failed: %s", MH_StatusToString(st));
         return false;
     }
-    Logf("ENGINE hooks ready: queue fn at exe+0x%llx, GPS window jump %s", static_cast<unsigned long long>(queue - reinterpret_cast<uint8_t*>(exe)),
+    uint8_t* load = FindUniquePattern(exe, kLoadSignature, &hits);
+    if (load) {
+        st = MH_CreateHook(load, reinterpret_cast<void*>(&HookLoad), reinterpret_cast<void**>(&g_origLoad));
+        if (st == MH_OK) st = MH_EnableHook(load);
+        if (st != MH_OK) {
+            Logf("ENGINE load hook failed: %s", MH_StatusToString(st));
+            load = nullptr;
+        }
+    } else {
+        Logf("ENGINE resource load signature: %d matches (need exactly 1), only the queue hook is used", hits);
+    }
+    Logf("ENGINE hooks ready: queue fn at exe+0x%llx, load fn %s, GPS window jump %s",
+         static_cast<unsigned long long>(queue - reinterpret_cast<uint8_t*>(exe)), load ? "hooked" : "NOT hooked",
          g_gpsJump ? "found" : "NOT found");
     // Same order as the original approach: the game's GPS UI is off before any truck is loaded.
     if (disableGameGps) EngineDisableGameGps();
