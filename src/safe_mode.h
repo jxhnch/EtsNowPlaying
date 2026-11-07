@@ -3,8 +3,8 @@
 
 namespace ep {
 
-// Which parts of the screen feature are active. After a crash the plugin switches parts off one
-// step at a time, so a bad interaction with a game version or driver can never lock the user out.
+// Which parts of the screen feature are active. Normally everything; the stages are a developer switch
+// ([features] force_stage in the INI) that turns parts off one at a time when hunting for a problem.
 struct Features {
     int stage = 0;               // 0 = everything on ... 4 = display fully off (diagnostics only)
     bool screen = true;          // redirect the GPS texture and replace it with ours
