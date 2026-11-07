@@ -45,42 +45,6 @@ bool SafeStringEquals(const char* p, const char* expected) {
     }
 }
 
-// Diagnosis for game updates: which paths pass through the queue? (a few, and everything that mentions "gps")
-struct SeenPath {
-    char text[200];
-};
-thread_local SeenPath g_pending[6];
-thread_local int g_pendingCount = 0;
-uint64_t g_seenHashes[256];
-int g_seenCount = 0;
-std::atomic<int> g_requestsSeen{0};
-
-bool Interesting(const char* path) {
-    char lower[200];
-    size_t i = 0;
-    for (; path[i] && i < sizeof(lower) - 1; ++i) lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(path[i])));
-    lower[i] = 0;
-    return strstr(lower, "gps") != nullptr;
-}
-
-// Called with the queue lock held: only remembers, the logging happens after the lock is released.
-void NotePath(const char* path) {
-    const int seen = g_requestsSeen.fetch_add(1);
-    uint64_t h = 1469598103934665603ull;
-    for (const char* p = path; *p; ++p) {
-        h ^= static_cast<unsigned char>(*p);
-        h *= 1099511628211ull;
-    }
-    if (!(seen < 5 || Interesting(path))) return;
-    for (int i = 0; i < g_seenCount; ++i) {
-        if (g_seenHashes[i] == h) return;
-    }
-    if (g_seenCount >= 256 || g_pendingCount >= 6) return;
-    g_seenHashes[g_seenCount++] = h;
-    strncpy_s(g_pending[g_pendingCount].text, path, _TRUNCATE);
-    ++g_pendingCount;
-}
-
 // Rewrites queued requests for the game's GPS texture. Runs with the queue's spin lock held.
 int RewriteQueued(uint8_t* self) {
     int n = 0;
@@ -91,7 +55,6 @@ int RewriteQueued(uint8_t* self) {
             uint8_t* request = *reinterpret_cast<uint8_t**>(node + 0x10);
             if (!request) continue;
             char* path = *reinterpret_cast<char**>(request + 0x40);
-            if (path) NotePath(path);
             if (!path || strcmp(path, kGameGpsPath) != 0) continue;
             g_gpsSightings.fetch_add(1);
             if (g_observeOnly) continue;
@@ -119,10 +82,8 @@ uint64_t __fastcall HookQueue(void* self) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         if (locked) {
-            g_pendingCount = 0;
             int n = RewriteQueued(static_cast<uint8_t*>(self));
             _InterlockedExchange8(const_cast<char*>(lock), 0);
-            for (int i = 0; i < g_pendingCount; ++i) Logf("ENGINE queue: texture request '%s'", g_pending[i].text);
             if (n > 0) {
                 int total = g_rewrites.fetch_add(n) + n;
                 Logf("ENGINE redirected %d texture request(s) for the cabin GPS to '%s' (total %d)", n, g_override, total);
@@ -145,17 +106,14 @@ const char* kLoadSignature =
 using LoadFn = void*(__fastcall*)(void*, void*, const char**, void*, uint64_t);
 LoadFn g_origLoad = nullptr;
 std::atomic<int> g_loadRedirects{0};
-std::atomic<int> g_loadCalls{0};
 
 void* __fastcall HookLoad(void* self, void* out, const char** path, void* opts, uint64_t flags) {
     const char* saved = nullptr;
     bool swapped = false;
     if (!g_off && path) {
-        char shown[160] = {};
         __try {
             const char* p = *path;
             if (p) {
-                if (g_loadCalls.fetch_add(1) < 3) strncpy_s(shown, p, _TRUNCATE);
                 if (strcmp(p, kGameGpsPath) == 0) {
                     g_gpsSightings.fetch_add(1);
                     if (!g_observeOnly) {
@@ -168,7 +126,6 @@ void* __fastcall HookLoad(void* self, void* out, const char** path, void* opts, 
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             swapped = false;
         }
-        if (shown[0]) Logf("ENGINE load request seen: '%s'", shown);
     }
     void* result = g_origLoad(self, out, path, opts, flags);
     if (swapped) {
