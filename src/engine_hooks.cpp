@@ -22,6 +22,9 @@ const char* kQueueSignature =
 // The je at +10 decides whether the cabin GPS UI is rendered.
 const char* kGpsWindowSignature =
     "49 8B 96 ?? ?? ?? ?? 48 85 D2 0F 84 ?? ?? ?? ?? 4D 8B 86 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ??";
+// The same code with a short jump (the compiler picked that form for a neighbouring spot in game 1.62).
+const char* kGpsWindowSignatureShort =
+    "49 8B 96 ?? ?? ?? ?? 48 85 D2 74 ?? 4D 8B 86 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ??";
 
 const char kGameGpsPath[] = "/vehicle/truck/share/gps.tobj";
 
@@ -32,6 +35,8 @@ std::atomic<bool> g_off{false};
 char g_override[128] = {};
 size_t g_overrideLen = 0;
 uint8_t* g_gpsJump = nullptr;
+int g_gpsLen = 2;  // bytes that are patched (2: near je -> nop;jmp, 1: short je -> jmp)
+uint8_t g_gpsOrig[2] = {}, g_gpsNew[2] = {};
 std::atomic<bool> g_gpsPatched{false};
 std::atomic<int> g_rewrites{0};
 std::atomic<bool> g_observeOnly{false};  // count GPS lookups, redirect nothing
@@ -157,13 +162,34 @@ bool EngineHooksInstall(const char* overridePath, bool disableGameGps) {
         Logf("ENGINE texture queue signature: %d matches (need exactly 1) - game updated? GPS display disabled", hits);
         return false;
     }
+    // The compiler may emit the jump as a near `je` (0F 84 rel32, game 1.61/1.62) or as a short one (74 rel8): try both.
     uint8_t* gps = FindUniquePattern(exe, kGpsWindowSignature, &hits);
+    bool shortJump = false;
+    if (!gps) {
+        const int nearHits = hits;
+        gps = FindUniquePattern(exe, kGpsWindowSignatureShort, &hits);
+        shortJump = gps != nullptr;
+        if (!gps) hits = nearHits;
+    }
     if (gps) {
         // Sanity check: the lea after the jump must point at the string "GPSWindow".
-        int32_t rel = *reinterpret_cast<int32_t*>(gps + 26);
-        const char* name = reinterpret_cast<const char*>(gps + 30 + rel);
-        if (gps[10] == 0x0F && gps[11] == 0x84 && SafeStringEquals(name, "GPSWindow")) {
+        const int leaDisp = shortJump ? 22 : 26;
+        int32_t rel = *reinterpret_cast<int32_t*>(gps + leaDisp);
+        const char* name = reinterpret_cast<const char*>(gps + leaDisp + 4 + rel);
+        const bool jumpOk = shortJump ? gps[10] == 0x74 : (gps[10] == 0x0F && gps[11] == 0x84);
+        if (jumpOk && SafeStringEquals(name, "GPSWindow")) {
             g_gpsJump = gps + 10;
+            g_gpsLen = shortJump ? 1 : 2;
+            if (shortJump) {  // 74 rel8 (je) -> EB rel8 (jmp)
+                g_gpsOrig[0] = 0x74;
+                g_gpsNew[0] = 0xEB;
+            } else {  // 0F 84 rel32 (je) -> 90 E9 rel32 (nop; jmp)
+                g_gpsOrig[0] = 0x0F;
+                g_gpsOrig[1] = 0x84;
+                g_gpsNew[0] = 0x90;
+                g_gpsNew[1] = 0xE9;
+            }
+            if (shortJump) Logf("ENGINE GPS window jump found in its short form");
         } else {
             Logf("ENGINE GPS window signature matched but the string check failed - not patching");
         }
@@ -200,30 +226,35 @@ bool EngineHooksInstall(const char* overridePath, bool disableGameGps) {
     return true;
 }
 
+// Writes the (1 or 2) bytes of the GPS window jump.
+static bool WriteGpsJump(const uint8_t* bytes) {
+    DWORD old = 0;
+    if (!VirtualProtect(g_gpsJump, 2, PAGE_EXECUTE_READWRITE, &old)) return false;
+    if (g_gpsLen == 2) {
+        short word;
+        memcpy(&word, bytes, 2);
+        _InterlockedExchange16(reinterpret_cast<short*>(g_gpsJump), word);
+    } else {
+        _InterlockedExchange8(reinterpret_cast<char*>(g_gpsJump), static_cast<char>(bytes[0]));
+    }
+    VirtualProtect(g_gpsJump, 2, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), g_gpsJump, 2);
+    return true;
+}
+
 void EngineDisableGameGps() {
     if (!g_gpsJump || g_gpsPatched.exchange(true)) return;
-    DWORD old = 0;
-    if (!VirtualProtect(g_gpsJump, 2, PAGE_EXECUTE_READWRITE, &old)) {
+    if (!WriteGpsJump(g_gpsNew)) {
         Logf("ENGINE VirtualProtect failed (%lu)", GetLastError());
         g_gpsPatched = false;
         return;
     }
-    // 0F 84 rel32 (je) -> 90 E9 rel32 (nop; jmp): same target, always taken.
-    _InterlockedExchange16(reinterpret_cast<short*>(g_gpsJump), static_cast<short>(0xE990));
-    VirtualProtect(g_gpsJump, 2, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), g_gpsJump, 2);
     Logf("ENGINE game GPS window switched off");
 }
 
 void EngineRestoreGameGps() {
     if (g_gpsJump && g_gpsPatched.exchange(false)) {
-        DWORD old = 0;
-        if (VirtualProtect(g_gpsJump, 2, PAGE_EXECUTE_READWRITE, &old)) {
-            _InterlockedExchange16(reinterpret_cast<short*>(g_gpsJump), static_cast<short>(0x840F));
-            VirtualProtect(g_gpsJump, 2, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), g_gpsJump, 2);
-            Logf("ENGINE game GPS window switched back on");
-        }
+        if (WriteGpsJump(g_gpsOrig)) Logf("ENGINE game GPS window switched back on");
     }
 }
 
