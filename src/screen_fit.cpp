@@ -50,8 +50,10 @@ int g_attempts = 0;
 ULONGLONG g_resetTick = 0;
 ScanWindow g_scanLast;  // last measurement of the visible texture window
 int g_scanVotes = 0;
-bool g_scanStable = false;  // three equal measurements in a row
-ScanWindow g_scan;          // the accepted window
+bool g_scanStable = false;  // the window stopped growing and the shape was judged
+ScanWindow g_scanUnion;     // what all scan pictures together have shown of the texture so far
+bool g_scanApplied = false; // the (provisional or final) measured window is in use
+ScanWindow g_scan;          // the window in use
 int g_scanNotes = 0;        // measurements received since the screen appeared
 std::vector<double> g_shapeSamples;  // measured uv aspect of the window, one per scan picture
 bool g_shapeOk = false;     // a consistent measurement exists
@@ -642,10 +644,16 @@ void Recompute() {
     const double meshDu = g_geo.uvMax[0] - meshU0, meshDv = g_geo.uvMax[1] - meshV0;
     double umin = meshU0, vmin = meshV0, du = meshDu, dv = meshDv;
     bool measured = false;
-    if (g_scanStable) {
+    if (g_scanApplied) {
         const double tol = 0.04;
-        if (std::fabs(g_scan.uMin - meshU0) > tol || std::fabs(g_scan.uMax - (meshU0 + meshDu)) > tol ||
-            std::fabs(g_scan.vMin - meshV0) > tol || std::fabs(g_scan.vMax - (meshV0 + meshDv)) > tol) {
+        // Until the measurement has settled a smaller window could just be a screen that is only partly in view: it is only
+        // used early if it contains the whole window the mesh describes (the mesh then covers just a part of the screen).
+        const double slack = 0.02;
+        const bool containsMesh = g_scan.uMin <= meshU0 + slack && g_scan.uMax >= meshU0 + meshDu - slack &&
+                                  g_scan.vMin <= meshV0 + slack && g_scan.vMax >= meshV0 + meshDv - slack;
+        if ((g_scanStable || containsMesh) &&
+            (std::fabs(g_scan.uMin - meshU0) > tol || std::fabs(g_scan.uMax - (meshU0 + meshDu)) > tol ||
+             std::fabs(g_scan.vMin - meshV0) > tol || std::fabs(g_scan.vMax - (meshV0 + meshDv)) > tol)) {
             umin = g_scan.uMin;
             vmin = g_scan.vMin;
             du = g_scan.uMax - g_scan.uMin;
@@ -738,6 +746,8 @@ void ResetLocked(const char* reason) {
     g_scanVotes = 0;
     g_scanNotes = 0;
     g_scanStable = false;
+    g_scanUnion = ScanWindow{};
+    g_scanApplied = false;
     g_scan = ScanWindow{};
     g_shapeSamples.clear();
     g_shapeOk = false;
@@ -940,12 +950,33 @@ void FitNoteScanWindow(const ScanWindow& w) {
     if (!g_enabled || !w.ok) return;
     std::lock_guard<std::mutex> lock(g_mx);
     if (g_scanStable) return;
-    const double tol = 0.02;
-    bool same = g_scanLast.ok && std::fabs(g_scanLast.uMin - w.uMin) < tol && std::fabs(g_scanLast.uMax - w.uMax) < tol &&
-                std::fabs(g_scanLast.vMin - w.vMin) < tol && std::fabs(g_scanLast.vMax - w.vMax) < tol;
-    g_scanVotes = same ? g_scanVotes + 1 : 1;
-    g_scanLast = w;
+    // The visible window is the union of what the pictures show: a picture taken while the screen is only partly in view can
+    // only be too small, never too large. It is applied at once (the mesh may describe only a part of the screen, and the
+    // picture would look distorted until the measurement settled) and grows with the next pictures.
+    const double tol = 0.01;
+    bool grew = !g_scanApplied;
+    if (!g_scanApplied) {
+        g_scanUnion = w;
+    } else {
+        if (w.uMin < g_scanUnion.uMin - tol || w.uMax > g_scanUnion.uMax + tol || w.vMin < g_scanUnion.vMin - tol ||
+            w.vMax > g_scanUnion.vMax + tol) {
+            grew = true;
+        }
+        g_scanUnion.uMin = std::min(g_scanUnion.uMin, w.uMin);
+        g_scanUnion.uMax = std::max(g_scanUnion.uMax, w.uMax);
+        g_scanUnion.vMin = std::min(g_scanUnion.vMin, w.vMin);
+        g_scanUnion.vMax = std::max(g_scanUnion.vMax, w.vMax);
+    }
+    g_scanVotes = grew ? 0 : g_scanVotes + 1;
     ++g_scanNotes;
+    if (grew && g_geo.ok) {
+        g_scanApplied = true;
+        g_scan = g_scanUnion;
+        Recompute();
+    } else if (grew) {
+        g_scanApplied = true;
+        g_scan = g_scanUnion;
+    }
     if (w.shapeOk) {
         g_shapeSamples.push_back(w.uvAspect);
         if (g_shapeSamples.size() > 15) g_shapeSamples.erase(g_shapeSamples.begin());
@@ -953,9 +984,10 @@ void FitNoteScanWindow(const ScanWindow& w) {
     // Stable: the same window three times in a row, and a few shape measurements to take the median of (or, if the view
     // never allows a shape measurement, a fair number of tries).
     if (g_scanVotes >= 3 && (g_shapeSamples.size() >= 5 || g_scanNotes >= 40)) {
-        g_scan = w;
+        g_scan = g_scanUnion;
         g_scanStable = true;
-        Logf("FIT visible texture window measured on screen: u %.3f..%.3f, v %.3f..%.3f", w.uMin, w.uMax, w.vMin, w.vMax);
+        Logf("FIT visible texture window measured on screen: u %.3f..%.3f, v %.3f..%.3f", g_scan.uMin, g_scan.uMax, g_scan.vMin,
+             g_scan.vMax);
         g_shapeOk = false;
         if (g_shapeSamples.size() >= 3) {
             std::vector<double> sorted = g_shapeSamples;
