@@ -593,7 +593,19 @@ Geometry Analyze(ID3D11DeviceContext* ctx, UINT indexCount, UINT startIndex, INT
     std::vector<Vertex> flat;
     bool robust = RobustSubset(verts, flat);
     if (!robust) flat = verts;
-    else Logf("FIT %zu of %zu vertices form one flat, evenly textured surface (the screen)", flat.size(), verts.size());
+    else {
+        Logf("FIT %zu of %zu vertices form one flat, evenly textured surface (the screen)", flat.size(), verts.size());
+        if (flat.size() < verts.size()) {
+            // A slightly curved screen: the biggest flat set drops its outer strips. If one simple mapping still explains all
+            // vertices well (a frame or bezel never does), take them all, so the mesh covers the whole screen.
+            Surface all;
+            if (FitSurface(verts, all) && all.error <= 0.015 && PlausibleSurface(all)) {
+                Logf("FIT the surface is slightly curved (error %.3f%% with all %zu vertices): using all of them", all.error * 100,
+                     verts.size());
+                flat = verts;
+            }
+        }
+    }
 
     Surface s;
     if (!FitSurface(flat, s)) {
