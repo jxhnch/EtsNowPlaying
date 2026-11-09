@@ -343,6 +343,23 @@ int Match(const RadioSnapshot& s) {
     return -1;
 }
 
+// During normal programme the stream's own title already carries the song ("Artist - Song (show info)"): then the artist is
+// kept and the show info dropped. Only when the stream does not carry the song (it sends just the show name) the song from
+// the source stands alone.
+std::string CombineWithStreamTitle(const std::string& stream, const std::string& song) {
+    const std::string hay = Lower(stream), needle = Lower(song);
+    const size_t pos = needle.empty() ? std::string::npos : hay.find(needle);
+    if (pos == std::string::npos) return song;
+    std::string artist = Trim(stream.substr(0, pos));
+    while (!artist.empty() && (artist.back() == '-' || artist.back() == ':' || artist.back() == ' ')) artist.pop_back();
+    // a dash that is not a plain '-' (en/em dash) at the end
+    for (const char* dash : {"\xE2\x80\x93", "\xE2\x80\x94"}) {
+        if (artist.size() >= 3 && artist.compare(artist.size() - 3, 3, dash) == 0) artist.resize(artist.size() - 3);
+    }
+    artist = Trim(artist);
+    return artist.empty() ? song : artist + " - " + song;
+}
+
 void Fetch(int idx) {
     const Entry& e = g_entries[static_cast<size_t>(idx)];
     std::vector<uint8_t> body;
@@ -428,7 +445,7 @@ void ExtraSourcesApply(RadioSnapshot& s) {
     const Runtime& rt = g_rt[static_cast<size_t>(idx)];
     const ULONGLONG maxAge = std::max<ULONGLONG>(30000, static_cast<ULONGLONG>(g_entries[static_cast<size_t>(idx)].intervalSec) * 3000);
     if (rt.value.empty() || GetTickCount64() - rt.valueTick > maxAge) return;
-    s.title = rt.value;
+    s.title = CombineWithStreamTitle(s.title, rt.value);
     s.titleSerial += rt.serial << 40;  // a new song counts as a new title for the screen's fades and cover lookup
 }
 

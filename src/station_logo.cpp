@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -116,35 +117,45 @@ std::vector<Hit> ParseStations(const std::string& json) {
     return hits;
 }
 
-bool FindFaviconUrl(const Job& job, std::string& favicon) {
+// The first bytes of a real image. Some "favicon" addresses of radio-browser lead to a web page (status 200, HTML).
+bool LooksLikeImage(const std::vector<uint8_t>& b) {
+    if (b.size() < 16) return false;
+    const uint8_t* p = b.data();
+    if (p[0] == 0x89 && p[1] == 'P' && p[2] == 'N' && p[3] == 'G') return true;
+    if (p[0] == 0xFF && p[1] == 0xD8 && p[2] == 0xFF) return true;
+    if (memcmp(p, "GIF8", 4) == 0) return true;
+    if (p[0] == 'B' && p[1] == 'M') return true;
+    if (memcmp(p, "RIFF", 4) == 0 && memcmp(p + 8, "WEBP", 4) == 0) return true;
+    if (p[0] == 0 && p[1] == 0 && p[2] == 1 && p[3] == 0) return true;  // icon
+    return false;
+}
+
+void AddUnique(std::vector<std::string>& urls, const std::string& url) {
+    if (!url.empty() && urls.size() < 8 && std::find(urls.begin(), urls.end(), url) == urls.end()) urls.push_back(url);
+}
+
+// Candidate logo addresses, best first: the entries with the very stream URL, then the name matches.
+bool FindFaviconUrls(const Job& job, std::vector<std::string>& urls) {
     std::string json;
     // 1. The very stream URL from live_streams.sii.
     if (!job.url.empty() && ApiGet(L"/json/stations/byurl?url=" + W(UrlEncode(job.url)), json)) {
-        auto hits = ParseStations(json);
-        if (!hits.empty()) {
-            favicon = hits.front().favicon;
-            return true;
-        }
+        for (const Hit& h : ParseStations(json)) AddUnique(urls, h.favicon);
     }
-    // 2. By name (and country when the list has a real country code), best name match first.
+    // 2. By name (and country when the list has a real country code), exact name matches first.
     std::wstring path = L"/json/stations/search?hidebroken=true&order=votes&reverse=true&limit=15&name=" +
                         W(UrlEncode(job.name));
     if (job.country.size() == 2) path += L"&countrycode=" + W(UrlEncode(job.country));
-    if (!ApiGet(path, json)) return false;
-    const std::wstring want = NormalizeKey(ToWide(job.name));
-    const Hit* best = nullptr;
-    auto hits = ParseStations(json);
-    for (const Hit& h : hits) {
-        std::wstring got = NormalizeKey(ToWide(h.name));
-        if (got == want) {
-            best = &h;
-            break;
+    if (ApiGet(path, json)) {
+        const std::wstring want = NormalizeKey(ToWide(job.name));
+        const auto hits = ParseStations(json);
+        for (const Hit& h : hits) {
+            if (NormalizeKey(ToWide(h.name)) == want) AddUnique(urls, h.favicon);
         }
-        if (!best && SimilarKeys(got, want) && want.size() >= 3) best = &h;
+        for (const Hit& h : hits) {
+            if (want.size() >= 3 && SimilarKeys(NormalizeKey(ToWide(h.name)), want)) AddUnique(urls, h.favicon);
+        }
     }
-    if (!best) return false;
-    favicon = best->favicon;
-    return true;
+    return !urls.empty();
 }
 
 void Process(const Job& job) {
@@ -153,18 +164,26 @@ void Process(const Job& job) {
     const std::wstring img = CachePath(job.key, L".img"), none = CachePath(job.key, L".none");
 
     std::vector<uint8_t> bytes;
-    if (ReadFile(img, bytes)) {
+    if (ReadFile(img, bytes) && !LooksLikeImage(bytes)) {  // an earlier version cached a web page as a logo
+        DeleteFileW(img.c_str());
+        bytes.clear();
+    }
+    if (!bytes.empty()) {
         image = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
         state = LogoState::Found;
     } else if (!FileIsRecent(none, 7)) {
-        std::string favicon;
-        if (FindFaviconUrl(job, favicon)) {
-            std::vector<uint8_t> logo;
-            if (HttpGet(ToWide(favicon), logo, 6000, 2 * 1024 * 1024) && logo.size() > 100) {
-                WriteFile(img, logo);
-                image = std::make_shared<std::vector<uint8_t>>(std::move(logo));
-                state = LogoState::Found;
-                Logf("LOGO '%s': %s (%zu bytes)", job.name.c_str(), favicon.c_str(), image->size());
+        std::vector<std::string> urls;
+        if (FindFaviconUrls(job, urls)) {
+            for (const std::string& favicon : urls) {
+                std::vector<uint8_t> logo;
+                if (HttpGet(ToWide(favicon), logo, 6000, 2 * 1024 * 1024) && LooksLikeImage(logo)) {
+                    WriteFile(img, logo);
+                    image = std::make_shared<std::vector<uint8_t>>(std::move(logo));
+                    state = LogoState::Found;
+                    Logf("LOGO '%s': %s (%zu bytes)", job.name.c_str(), favicon.c_str(), image->size());
+                    break;
+                }
+                Logf("LOGO '%s': %s is not an image, trying the next one", job.name.c_str(), favicon.c_str());
             }
         }
         if (state != LogoState::Found) {
