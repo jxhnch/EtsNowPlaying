@@ -79,10 +79,16 @@ void LogDesc(const char* what, const D3D11_TEXTURE2D_DESC& d, bool hasInit) {
          static_cast<unsigned>(d.Usage), d.BindFlags, d.CPUAccessFlags, d.MiscFlags, hasInit ? 1 : 0);
 }
 
+// Our placeholder file is a plain BC3 texture with one mip level, created without data, shortly after the game was made to
+// look it up. Other game textures can have the same size (a curb strip is 64x2048 too), so every one of these has to match:
+// the same size alone once made the plugin treat a road texture as the screen.
 bool IsPlaceholder(const D3D11_TEXTURE2D_DESC* d) {
-    return d->Width == kPlaceholderWidth && d->Height == kPlaceholderHeight && d->ArraySize == 1 &&
+    return d->Width == kPlaceholderWidth && d->Height == kPlaceholderHeight && d->ArraySize == 1 && d->MipLevels == 1 &&
+           d->SampleDesc.Count == 1 && d->Usage == D3D11_USAGE_DEFAULT && d->BindFlags == D3D11_BIND_SHADER_RESOURCE &&
+           d->CPUAccessFlags == 0 && d->MiscFlags == 0 &&
            (d->Format == DXGI_FORMAT_BC3_UNORM || d->Format == DXGI_FORMAT_BC3_UNORM_SRGB ||
-            d->Format == DXGI_FORMAT_BC3_TYPELESS);
+            d->Format == DXGI_FORMAT_BC3_TYPELESS) &&
+           EngineRedirectRecent(60000);
 }
 
 bool IsSwapSrv(ID3D11ShaderResourceView* s) {

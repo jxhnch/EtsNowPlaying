@@ -41,6 +41,7 @@ std::atomic<bool> g_gpsPatched{false};
 std::atomic<int> g_rewrites{0};
 std::atomic<bool> g_observeOnly{false};  // count GPS lookups, redirect nothing
 std::atomic<int> g_gpsSightings{0};
+std::atomic<ULONGLONG> g_lastRedirectTick{0};
 
 bool SafeStringEquals(const char* p, const char* expected) {
     __try {
@@ -63,6 +64,7 @@ int RewriteQueued(uint8_t* self) {
             if (!path || strcmp(path, kGameGpsPath) != 0) continue;
             g_gpsSightings.fetch_add(1);
             if (g_observeOnly) continue;
+            g_lastRedirectTick = GetTickCount64();
             // Our path is not longer than the original, so it fits into the existing buffer.
             memcpy(path, g_override, g_overrideLen + 1);
             *reinterpret_cast<int*>(request + 0x48) = static_cast<int>(g_overrideLen);
@@ -122,6 +124,7 @@ void* __fastcall HookLoad(void* self, void* out, const char** path, void* opts, 
                 if (strcmp(p, kGameGpsPath) == 0) {
                     g_gpsSightings.fetch_add(1);
                     if (!g_observeOnly) {
+                        g_lastRedirectTick = GetTickCount64();
                         saved = p;
                         *path = g_override;
                         swapped = true;
@@ -266,5 +269,9 @@ void EngineHooksDisable() {
 void EngineSetObserveOnly(bool on) { g_observeOnly = on; }
 int EngineRedirects() { return g_rewrites.load() + g_loadRedirects.load(); }
 int EngineGpsSightings() { return g_gpsSightings.load(); }
+bool EngineRedirectRecent(unsigned ms) {
+    const ULONGLONG t = g_lastRedirectTick.load();
+    return t != 0 && GetTickCount64() - t <= ms;
+}
 
 }  // namespace ep

@@ -20,5 +20,8 @@ void EngineRestoreGameGps();
 void EngineSetObserveOnly(bool on);
 int EngineRedirects();      // GPS lookups redirected to our placeholder in this session
 int EngineGpsSightings();  // GPS lookups seen, redirected or not
+// True if a GPS lookup was redirected to our placeholder within the last `ms` milliseconds. Only then can a texture that
+// is created belong to our placeholder file.
+bool EngineRedirectRecent(unsigned ms);
 
 }  // namespace ep
