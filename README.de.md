@@ -51,8 +51,17 @@ Entferne vorher andere Plugins, die das GPS-Display verändern, sie würden sich
 | `[screen] auto_fit` | `1` | Bild an das Display jedes Fahrzeugs anpassen. `0` = aus. |
 | `[media] app_filter` | `spotify` | Nur diese App zeigen. Leer = jeder Mediaplayer. |
 | `[radio] cover_lookup` | `1` | Song-Cover und Sender-Logos online suchen. `0` = aus. |
+| `[radio] cover_mode` | `cover` | `cover` = Song-Cover (das Senderlogo, wenn keins gefunden wird). `logo` = immer das Senderlogo, nie ein Song-Cover. |
 | `[radio] extra_sources` | `1` | Die optionale Datei `EtsNowPlaying.sources.ini` benutzen (siehe unten). `0` = nie. |
 | `[touch] enabled` | `1` | Maus-Tasten auf dem Display. `0` = aus. |
+
+## Eigene Sender-Bilder
+
+Ein Sender ohne Logo (oder mit falschem) kann ein eigenes Bild bekommen: Lege eine Datei, benannt wie der Sender, in
+`Dokumente\Euro Truck Simulator 2\EtsNowPlaying\logos\custom\`, zum Beispiel `Real Hardstyle.png` (der Name ist der Sendername aus
+deiner `live_streams.sii`, Groß- und Kleinschreibung egal; PNG, JPG, WEBP, GIF, BMP und ICO gehen). Dein Bild hat Vorrang vor
+dem Logo von radio-browser.info und braucht kein Internet. Mit `cover_mode=logo` ist es das einzige Bild, das für diesen
+Sender erscheint. Nach dem Hinzufügen das Spiel neu starten.
 
 ## Optional: zusätzliche Song-Quellen
 

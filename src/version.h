@@ -1,3 +1,3 @@
 #pragma once
 
-#define ETSNP_VERSION "1.1.4"
+#define ETSNP_VERSION "1.1.5"

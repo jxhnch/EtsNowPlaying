@@ -51,8 +51,17 @@ Remove other plugins that change the GPS screen first, they would get in each ot
 | `[screen] auto_fit` | `1` | Fit the picture to each vehicle's display. `0` = off. |
 | `[media] app_filter` | `spotify` | Only show this app. Empty = any media player. |
 | `[radio] cover_lookup` | `1` | Look up song covers and station logos online. `0` = off. |
+| `[radio] cover_mode` | `cover` | `cover` = song covers (the station's logo when none is found). `logo` = always the station's logo, never a song cover. |
 | `[radio] extra_sources` | `1` | Use the optional file `EtsNowPlaying.sources.ini` (see below). `0` = never. |
 | `[touch] enabled` | `1` | Mouse buttons on the screen. `0` = off. |
+
+## Your own station pictures
+
+A station without a logo (or with a wrong one) can get its own picture: put a file named like the station into
+`Documents\Euro Truck Simulator 2\EtsNowPlaying\logos\custom\`, for example `Real Hardstyle.png` (the name is the station
+name from your `live_streams.sii`, upper/lower case does not matter; PNG, JPG, WEBP, GIF, BMP and ICO work). Your picture
+wins over the logo from radio-browser.info and needs no internet. With `cover_mode=logo` it is the only picture shown for that
+station. Restart the game after adding a file.
 
 ## Optional: extra song sources
 

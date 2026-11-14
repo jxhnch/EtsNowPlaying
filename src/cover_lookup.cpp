@@ -35,12 +35,31 @@ struct Wanted {
     std::wstring artistKey, firstKey, trackKey;
 };
 
+// "One contains the other" is too loose for short names: the title "Dom" is part of countless other titles and the artist
+// "Cleo" of "Cleopatra", which once gave a classical album cover to a pop song. Short keys must be equal; longer ones may
+// contain each other, but the shorter one has to be a substantial part of the longer (titles) or reasonably long (artists,
+// whose names come in different combinations: "A & B" against "B & A feat. C").
+bool SameTrack(const std::wstring& got, const std::wstring& want) {
+    if (got.empty() || want.empty()) return false;
+    if (got == want) return true;
+    const size_t shorter = std::min(got.size(), want.size()), longer = std::max(got.size(), want.size());
+    if (shorter < 6 || shorter * 10 < longer * 6) return false;
+    return got.find(want) != std::wstring::npos || want.find(got) != std::wstring::npos;
+}
+
+bool SameArtist(const std::wstring& got, const std::wstring& want) {
+    if (got.empty() || want.empty()) return false;
+    if (got == want) return true;
+    if (std::min(got.size(), want.size()) < 6) return false;
+    return got.find(want) != std::wstring::npos || want.find(got) != std::wstring::npos;
+}
+
 // A hit from a catalogue is accepted when the track matches and at least the main artist does.
 bool Accept(const Wanted& w, const std::string& gotArtist, const std::string& gotTrack) {
     std::wstring ga = NormalizeKey(ToWide(gotArtist));
     std::wstring gt = NormalizeKey(BaseTitle(ToWide(gotTrack)));
-    if (!SimilarKeys(gt, w.trackKey)) return false;
-    return SimilarKeys(ga, w.artistKey) || SimilarKeys(ga, w.firstKey);
+    if (!SameTrack(gt, w.trackKey)) return false;
+    return SameArtist(ga, w.artistKey) || SameArtist(ga, w.firstKey);
 }
 
 bool Download(const std::string& url, std::shared_ptr<const std::vector<uint8_t>>& image) {

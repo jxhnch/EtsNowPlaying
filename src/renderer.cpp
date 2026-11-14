@@ -513,7 +513,7 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
     CoverBytes picture;
     bool isLogo = false;
     uint64_t pictureKey = (std::hash<std::string>()(raw) * 31 + 7) | (1ull << 63);
-    if (hasSong && !artist.empty() && GetSettings().coverLookup) {
+    if (!GetSettings().logoOnly && hasSong && !artist.empty() && GetSettings().coverLookup) {
         if (raw != lastCoverRequest_) {
             lastCoverRequest_ = raw;
             CoverLookupRequest(raw);
@@ -524,7 +524,7 @@ void Renderer::DrawRadio(const RadioSnapshot& r, double t) {
             pictureKey = (std::hash<std::string>()(raw) * 31 + 1) | (1ull << 63);
         }
     }
-    if (!picture && GetSettings().coverLookup && !stationUtf8.empty()) {
+    if (!picture && !stationUtf8.empty()) {  // the logo lookup itself decides what may use the network
         const std::string stationKey = stationUtf8 + "|" + r.stationUrl;
         if (stationKey != lastLogoRequest_) {
             lastLogoRequest_ = stationKey;

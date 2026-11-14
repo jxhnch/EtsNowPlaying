@@ -8,6 +8,7 @@ struct Settings {
     bool flipVertical = true;       // [screen] flip_vertical: the game samples the screen texture upside down
     std::string appFilter = "spotify";  // [media] app_filter: only show media from apps containing this text ("" = any)
     bool coverLookup = true;        // [radio] cover_lookup: look up song covers for radio titles on iTunes
+    bool logoOnly = false;          // [radio] cover_mode=logo: always the station logo (or your own picture), never a song cover
     int radioStaleMs = 2500;        // [radio] pause_after_ms: no stream data for this long = radio paused
     int radioHoldMs = 600;          // [radio] switch_hold_ms: keep the radio screen this long after a stream ends
     bool touch = true;              // [touch] enabled: click the buttons on the screen with the mouse

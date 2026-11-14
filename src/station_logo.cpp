@@ -158,37 +158,67 @@ bool FindFaviconUrls(const Job& job, std::vector<std::string>& urls) {
     return !urls.empty();
 }
 
+// Own pictures: <plugin folder>\logos\custom\<station name>.png (or .jpg, .webp, .gif, .bmp, .ico). They win over everything else
+// and need no network.
+std::wstring SafeFileName(const std::string& name) {
+    std::wstring w = ToWide(name);
+    for (auto& c : w) {
+        if (c < 32 || wcschr(L"<>:\"/\\|?*", c)) c = L'_';
+    }
+    while (!w.empty() && (w.back() == L'.' || w.back() == L' ')) w.pop_back();
+    return w;
+}
+
+bool ReadCustomLogo(const std::string& stationName, std::vector<uint8_t>& out) {
+    const std::wstring base = SafeFileName(stationName);
+    if (base.empty()) return false;
+    for (const wchar_t* ext : {L".png", L".jpg", L".jpeg", L".webp", L".gif", L".bmp", L".ico"}) {
+        std::vector<uint8_t> b;
+        if (ReadFile(PluginDir() + L"\\logos\\custom\\" + base + ext, b) && LooksLikeImage(b)) {
+            out = std::move(b);
+            return true;
+        }
+    }
+    return false;
+}
+
 void Process(const Job& job) {
     std::shared_ptr<const std::vector<uint8_t>> image;
     LogoState state = LogoState::NotFound;
     const std::wstring img = CachePath(job.key, L".img"), none = CachePath(job.key, L".none");
 
     std::vector<uint8_t> bytes;
-    if (ReadFile(img, bytes) && !LooksLikeImage(bytes)) {  // an earlier version cached a web page as a logo
-        DeleteFileW(img.c_str());
-        bytes.clear();
-    }
-    if (!bytes.empty()) {
+    if (ReadCustomLogo(job.name, bytes)) {
         image = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
         state = LogoState::Found;
-    } else if (!FileIsRecent(none, 7)) {
-        std::vector<std::string> urls;
-        if (FindFaviconUrls(job, urls)) {
-            for (const std::string& favicon : urls) {
-                std::vector<uint8_t> logo;
-                if (HttpGet(ToWide(favicon), logo, 6000, 2 * 1024 * 1024) && LooksLikeImage(logo)) {
-                    WriteFile(img, logo);
-                    image = std::make_shared<std::vector<uint8_t>>(std::move(logo));
-                    state = LogoState::Found;
-                    Logf("LOGO '%s': %s (%zu bytes)", job.name.c_str(), favicon.c_str(), image->size());
-                    break;
-                }
-                Logf("LOGO '%s': %s is not an image, trying the next one", job.name.c_str(), favicon.c_str());
-            }
+        Logf("LOGO '%s': own picture from logos\\custom (%zu bytes)", job.name.c_str(), image->size());
+    } else {
+        if (ReadFile(img, bytes) && !LooksLikeImage(bytes)) {  // an earlier version cached a web page as a logo
+            DeleteFileW(img.c_str());
+            bytes.clear();
         }
-        if (state != LogoState::Found) {
-            WriteFile(none, {});  // do not ask again for a week
-            Logf("LOGO '%s': none found", job.name.c_str());
+        if (!bytes.empty()) {
+            image = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
+            state = LogoState::Found;
+        } else if (GetSettings().coverLookup && !FileIsRecent(none, 7)) {
+            std::vector<std::string> urls;
+            if (FindFaviconUrls(job, urls)) {
+                for (const std::string& favicon : urls) {
+                    std::vector<uint8_t> logo;
+                    if (HttpGet(ToWide(favicon), logo, 6000, 2 * 1024 * 1024) && LooksLikeImage(logo)) {
+                        WriteFile(img, logo);
+                        image = std::make_shared<std::vector<uint8_t>>(std::move(logo));
+                        state = LogoState::Found;
+                        Logf("LOGO '%s': %s (%zu bytes)", job.name.c_str(), favicon.c_str(), image->size());
+                        break;
+                    }
+                    Logf("LOGO '%s': %s is not an image, trying the next one", job.name.c_str(), favicon.c_str());
+                }
+            }
+            if (state != LogoState::Found) {
+                WriteFile(none, {});  // do not ask again for a week
+                Logf("LOGO '%s': none found", job.name.c_str());
+            }
         }
     }
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -197,8 +227,29 @@ void Process(const Job& job) {
     e.image = image;
 }
 
+const char kCustomReadme[] =
+    "Own station pictures\r\n"
+    "====================\r\n"
+    "\r\n"
+    "Put a picture here and name it like the station, for example:\r\n"
+    "\r\n"
+    "    Real Hardstyle.png\r\n"
+    "\r\n"
+    "The name is the station name from your live_streams.sii (upper/lower case does not matter). PNG, JPG, WEBP, GIF, BMP and\r\n"
+    "ICO work. The picture is used instead of the logo from radio-browser.info; with cover_mode=logo in EtsNowPlaying.ini it is\r\n"
+    "the only picture shown for that station. Restart the game after adding a file.\r\n";
+
 void Run() {
     CreateDirectoryW((PluginDir() + L"\\logos").c_str(), nullptr);
+    CreateDirectoryW((PluginDir() + L"\\logos\\custom").c_str(), nullptr);
+    const std::wstring readme = PluginDir() + L"\\logos\\custom\\README.txt";
+    if (GetFileAttributesW(readme.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        FILE* f = _wfopen(readme.c_str(), L"wb");
+        if (f) {
+            fwrite(kCustomReadme, 1, sizeof(kCustomReadme) - 1, f);
+            fclose(f);
+        }
+    }
     while (!g_stop) {
         Job job;
         {
@@ -230,7 +281,7 @@ void StationLogoStop() {
 }
 
 void StationLogoRequest(const std::string& stationName, const std::string& country, const std::string& listUrl) {
-    if (!GetSettings().coverLookup || stationName.empty()) return;
+    if (stationName.empty()) return;  // the lookup itself decides what may use the network
     const std::string key = KeyOf(stationName, listUrl);
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_cache.count(key)) return;

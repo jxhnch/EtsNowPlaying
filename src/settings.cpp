@@ -47,6 +47,9 @@ void LoadSettings(const std::wstring& dir) {
                 "[radio]\r\n"
                 "; 1 = look up song covers and station logos online (iTunes, Deezer, radio-browser.info). 0 = off.\r\n"
                 "cover_lookup=1\r\n"
+                "; cover = song covers (the station's logo when none is found). logo = always the station's logo, never a song cover.\r\n"
+                "; Own pictures for stations: put Station Name.png into the folder logos\\custom next to this file.\r\n"
+                "cover_mode=cover\r\n"
                 "; 1 = use the optional file EtsNowPlaying.sources.ini (extra song sources for stations that only send a show name).\r\n"
                 "; 0 = never use it.\r\n"
                 "extra_sources=1\r\n"
@@ -63,6 +66,7 @@ void LoadSettings(const std::wstring& dir) {
     EnsureKey(ini, L"screen", L"auto_fit", L"1");
     EnsureKey(ini, L"media", L"app_filter", L"spotify");
     EnsureKey(ini, L"radio", L"cover_lookup", L"1");
+    EnsureKey(ini, L"radio", L"cover_mode", L"cover");
     EnsureKey(ini, L"radio", L"extra_sources", L"1");
     EnsureKey(ini, L"touch", L"enabled", L"1");
     WritePrivateProfileStringW(L"beta", L"touch", nullptr, ini.c_str());
@@ -74,6 +78,11 @@ void LoadSettings(const std::wstring& dir) {
 
     g_settings.flipVertical = GetPrivateProfileIntW(L"screen", L"flip_vertical", 1, ini.c_str()) != 0;
     g_settings.coverLookup = GetPrivateProfileIntW(L"radio", L"cover_lookup", 1, ini.c_str()) != 0;
+    {
+        wchar_t mode[16] = {};
+        GetPrivateProfileStringW(L"radio", L"cover_mode", L"cover", mode, 16, ini.c_str());
+        g_settings.logoOnly = _wcsicmp(mode, L"logo") == 0;
+    }
     g_settings.radioStaleMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"pause_after_ms", 2500, ini.c_str()));
     g_settings.radioHoldMs = static_cast<int>(GetPrivateProfileIntW(L"radio", L"switch_hold_ms", 600, ini.c_str()));
     g_settings.extraSources = GetPrivateProfileIntW(L"radio", L"extra_sources", 1, ini.c_str()) != 0;
@@ -89,8 +98,8 @@ void LoadSettings(const std::wstring& dir) {
     for (auto& c : f) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     g_settings.appFilter = f;
 
-    Logf("SETTINGS flip_vertical=%d auto_fit=%d app_filter='%s' cover_lookup=%d touch=%d", g_settings.flipVertical,
-         g_settings.autoFit, g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.touch);
+    Logf("SETTINGS flip_vertical=%d auto_fit=%d app_filter='%s' cover_lookup=%d cover_mode=%s touch=%d", g_settings.flipVertical,
+         g_settings.autoFit, g_settings.appFilter.c_str(), g_settings.coverLookup, g_settings.logoOnly ? "logo" : "cover", g_settings.touch);
 }
 
 }  // namespace ep
