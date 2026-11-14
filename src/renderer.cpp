@@ -395,7 +395,13 @@ void Renderer::DrawMedia(const MediaSnapshot& m, double t) {
     DrawClock();
 
     std::string app = Lower(m.app);
-    std::wstring source = app.find("spotify") != std::string::npos ? L"SPOTIFY" : ToWide(m.app);
+    std::wstring source;
+    if (app.find("spotify") != std::string::npos) source = L"SPOTIFY";
+    else if (app.find("applemusic") != std::string::npos) source = L"Apple Music";
+    else if (app.find("deezer") != std::string::npos) source = L"Deezer";
+    else if (app.find("tidal") != std::string::npos) source = L"Tidal";
+    else if (app.find("amazon") != std::string::npos) source = L"Amazon Music";
+    else source = ToWide(m.app);
     if (source.size() > 4 && source.compare(source.size() - 4, 4, L".exe") == 0) source.resize(source.size() - 4);
     for (auto& c : source) c = static_cast<wchar_t>(towupper(c));
     Text(source, 40, 24, 300, 24, 15, DWRITE_FONT_WEIGHT_SEMI_BOLD, Rgb(accent_.r, accent_.g, accent_.b, 0.95f));
