@@ -400,7 +400,7 @@ void Renderer::DrawMedia(const MediaSnapshot& m, double t) {
     else if (app.find("applemusic") != std::string::npos) source = L"Apple Music";
     else if (app.find("deezer") != std::string::npos) source = L"Deezer";
     else if (app.find("tidal") != std::string::npos) source = L"Tidal";
-    else if (app.find("amazon") != std::string::npos) source = L"Amazon Music";
+    else if (app.find("amazonmusic") != std::string::npos) source = L"Amazon Music";
     else source = ToWide(m.app);
     if (source.size() > 4 && source.compare(source.size() - 4, 4, L".exe") == 0) source.resize(source.size() - 4);
     for (auto& c : source) c = static_cast<wchar_t>(towupper(c));
