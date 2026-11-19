@@ -1,8 +1,8 @@
 # EtsNowPlaying
 
 **Sieh auf dem GPS-Display deines Trucks, was du gerade hörst** – in Euro Truck Simulator 2 und American Truck Simulator.
-Das **Radio** im Spiel (Sender, Song, Interpret, Cover) oder **Spotify** (Cover, Titel, Interpret, Fortschritt), und du kannst
-direkt in der Kabine auf Zurück / Pause / Weiter klicken.
+Das **Radio** im Spiel (Sender, Song, Interpret, Cover oder Logo) oder **Spotify** (Cover, Titel, Interpret, Fortschritt), und du
+kannst direkt in der Kabine auf Zurück / Pause / Weiter klicken.
 
 *[English](README.md) · Deutsch*
 
@@ -13,10 +13,11 @@ direkt in der Kabine auf Zurück / Pause / Weiter klicken.
 
 ## Das bekommst du
 
-- **Radio:** Song, Interpret und Cover des Senders, den du im Spielradio hörst, dazu das Logo des Senders.
-- **Spotify:** Cover, Titel, Interpret, Album, Fortschrittsbalken und Play/Pause – aus der Windows-Mediensteuerung,
-  Spotify kann also im Hintergrund bleiben.
-- **Schaltet selbst um:** Radio an → Radio, Radio aus → Spotify.
+- **Radio:** Song und Interpret des Senders, den du im Spielradio hörst, mit dem Cover des Songs – oder dem Logo des Senders,
+  oder deinem eigenen Bild dafür.
+- **Spotify** (und andere Player): Cover, Titel, Interpret, Album, Fortschrittsbalken und Play/Pause, aus der
+  Windows-Mediensteuerung, der Player kann also im Hintergrund bleiben. Apple Music, Deezer, Tidal und Amazon Music zeigen ihren Namen.
+- **Schaltet selbst um:** Radio an → Radio, Radio aus → Musik-Player.
 - **Klicken zum Steuern:** Zurück, Play/Pause und Weiter gehen mit der Maus, direkt auf dem Display. Auf den Fortschrittsbalken
   klicken oder ihn ziehen, um im Song vor- und zurückzuspulen.
 - **Passt in jede Kabine:** Das Bild passt sich selbst an die Form des Displays jedes Fahrzeugs an – nichts pro Truck einstellen.
@@ -35,9 +36,9 @@ Entferne vorher andere Plugins, die das GPS-Display verändern, sie würden sich
 
 ## Benutzen
 
-- **Spotify:** einfach etwas abspielen.
+- **Spotify:** einfach etwas abspielen. Andere Player: `app_filter` einstellen (siehe Einstellungen).
 - **Radio:** im Spiel das Radio einschalten. Die Songtitel kommen aus dem Radio-Stream selbst, einige Sender, die keine Titel
-  senden, zeigen deshalb nur ihren Namen.
+  senden, zeigen deshalb nur ihren Namen (siehe auch *Optional: zusätzliche Song-Quellen*).
 - **Tasten:** Bei sichtbarem Mauszeiger in der Kabine (rechte Maustaste nicht gedrückt) auf dem Display ⏮ ⏯ ⏭ anklicken.
   Auf den Fortschrittsbalken klicken oder ziehen, um zu spulen (Spotify).
 
@@ -47,21 +48,25 @@ Entferne vorher andere Plugins, die das GPS-Display verändern, sie würden sich
 
 | Einstellung | Standard | |
 |---|---|---|
-| `[screen] flip_vertical` | `1` | Auf `0` setzen, wenn das Bild kopfsteht. (Nur bei `auto_fit=0`.) |
 | `[screen] auto_fit` | `1` | Bild an das Display jedes Fahrzeugs anpassen. `0` = aus. |
-| `[media] app_filter` | `spotify` | Nur diese App zeigen. Leer = jeder Mediaplayer. |
+| `[screen] flip_vertical` | `1` | Auf `0` setzen, wenn das Bild kopfsteht. (Nur bei `auto_fit=0`.) |
+| `[media] app_filter` | `spotify` | Nur diese App zeigen (Teil ihres Namens). Leer = jeder Mediaplayer. |
 | `[radio] cover_lookup` | `1` | Song-Cover und Sender-Logos online suchen. `0` = aus. |
 | `[radio] cover_mode` | `cover` | `cover` = Song-Cover (das Senderlogo, wenn keins gefunden wird). `logo` = immer das Senderlogo, nie ein Song-Cover. |
 | `[radio] extra_sources` | `1` | Die optionale Datei `EtsNowPlaying.sources.ini` benutzen (siehe unten). `0` = nie. |
 | `[touch] enabled` | `1` | Maus-Tasten auf dem Display. `0` = aus. |
 
-## Eigene Sender-Bilder
+## Cover, Logos und eigene Bilder
 
-Ein Sender ohne Logo (oder mit falschem) kann ein eigenes Bild bekommen: Lege eine Datei, benannt wie der Sender, in
+Beim Radio zeigt das Plugin in dieser Reihenfolge: das **Cover** des Songs (online nach Interpret und Titel gesucht; kurze Titel
+müssen genau passen, fremde Cover sind deshalb selten), sonst das **Logo** des Senders (von radio-browser.info), sonst die
+**Anfangsbuchstaben** des Senders. Mit `cover_mode=logo` entfällt das Cover, und es erscheint immer das Logo des Senders.
+
+Ein Sender ohne Logo oder mit falschem kann **dein eigenes Bild** bekommen: Lege eine Datei, benannt wie der Sender, in
 `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\logos\custom\`, zum Beispiel `Real Hardstyle.png` (der Name ist der Sendername aus
-deiner `live_streams.sii`, Groß- und Kleinschreibung egal; PNG, JPG, WEBP, GIF, BMP und ICO gehen). Dein Bild hat Vorrang vor
-dem Logo von radio-browser.info und braucht kein Internet. Mit `cover_mode=logo` ist es das einzige Bild, das für diesen
-Sender erscheint. Nach dem Hinzufügen das Spiel neu starten.
+deiner `live_streams.sii`, Groß- und Kleinschreibung egal; PNG, JPG, WEBP, GIF, BMP und ICO gehen). Dein Bild hat Vorrang vor dem
+Logo von radio-browser.info, wird nur von deinem PC gelesen und geht auch mit `cover_lookup=0`. Nach dem Hinzufügen das Spiel
+neu starten. Das Plugin legt den Ordner mit einer kurzen Notiz beim ersten Start an.
 
 ## Optional: zusätzliche Song-Quellen
 
@@ -81,23 +86,20 @@ interval=10
 ```
 
 Das Plugin fragt diese Adresse nur, solange der Sender läuft (standardmäßig alle 10 Sekunden). Liefert sie keinen Song oder ist sie
-nicht erreichbar, bleibt es beim Titel aus dem Stream. Mit `enabled=0` schaltest du einen Eintrag ab, mit `extra_sources=0` in der
-INI alles.
+nicht erreichbar, bleibt es beim Titel aus dem Stream. Trägt der Stream den Song schon mit, bleibt dessen Interpret erhalten. Mit
+`enabled=0` schaltest du einen Eintrag ab, mit `extra_sources=0` in der INI alles.
 
-## Datenschutz
-
-Kein Tracking, keine Konten. Mit `cover_lookup=1` sendet das Plugin den aktuellen Radio-*Titel* und den *Sendernamen* an
-iTunes, Deezer und radio-browser.info, um ein Cover oder Logo zu finden. Sonst verlässt nichts deinen PC. Mit `0` schaltest du das ab.
-Die optionale Quellen-Datei (siehe oben) bewirkt, dass das Plugin zusätzlich die dort eingetragene Web-Adresse fragt, solange dieser
-Sender läuft; diese Adresse sieht deine IP-Adresse wie jede Webseite. `extra_sources=0` schaltet das ab.
+*Real Hardstyle in der Senderliste des Spiels:* Das Spiel kann der https-Weiterleitung von `https://stream.realhardstyle.nl/` nicht
+folgen. Spielt der Sender nicht, trage `http://server-23.stream-server.nl:8326/` als Adresse in der `live_streams.sii` ein.
 
 ## Probleme?
 
 Das Plugin schreibt `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\diag.log`. Wenn du ein Problem meldest, hänge sie bitte an.
 
 **Nach einem Spiel-Update:** Eine neue Spielversion kann etwas verschieben, worauf das Plugin sich stützt. Dann lässt das Plugin das
-normale GPS des Spiels in Ruhe (oder schaltet es wieder ein) und sagt es dir mit einem kleinen Fenster (einmal pro Spielversion). Schau auf der [Releases](../../releases)-Seite nach einem Plugin-Update; gibt es noch keins, eröffne bitte ein Issue und
-hänge die Log-Datei an.
+normale GPS des Spiels in Ruhe (oder schaltet es wieder ein) und sagt es dir mit einem kleinen Fenster (einmal pro Spielversion).
+Schau auf der [Releases](../../releases)-Seite nach einem Plugin-Update; gibt es noch keins, eröffne bitte ein Issue und hänge die
+Log-Datei an.
 
 ## Selbst bauen
 
@@ -105,26 +107,23 @@ Du brauchst die Visual Studio 2022 Build Tools (C++). `build.bat` ausführen; da
 Enthalten: [MinHook](https://github.com/TsudaKageyu/minhook) und die SCS-SDK-Header, siehe
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Hinweis
-
-Nicht verbunden mit SCS Software, TruckersMP, Spotify, Apple oder Deezer. Das Plugin ändert Spielcode im Speicher – Nutzung auf
-eigenes Risiko, und beachte die Regeln der Server, auf denen du spielst.
-
 ## Datenschutz & Nutzungsbedingungen
 
 **Datenschutz.** EtsNowPlaying hat keine Konten, keine Analyse und keine eigene Telemetrie. Es liest den Radio-Stream des Spiels und
 die Windows-Mediensteuerung auf deinem PC aus. Mit `[radio] cover_lookup=1` (Standard) sendet es den **aktuellen Radio-Songtitel
 und den Sendernamen** an **iTunes Search (Apple), Deezer und radio-browser.info**, um ein Cover oder Logo zu finden; wie bei jeder
 Web-Anfrage sehen diese Dienste deine IP-Adresse. Sonst wird nichts gesendet: keine persönlichen Daten, keine Spieldaten, keine
-Spotify-Daten. Mit `cover_lookup=0` sind alle Online-Anfragen aus. Logos werden in
-`Dokumente\Euro Truck Simulator 2\EtsNowPlaying\logos` zwischengespeichert, und `diag.log` bleibt auf deinem PC, solange du sie nicht selbst
-verschickst. Ist ein Eintrag der optionalen Datei `EtsNowPlaying.sources.ini` aktiv (einer für Real Hardstyle Radio ist enthalten), fragt das
-Plugin zusätzlich die dort eingetragene Web-Adresse alle paar Sekunden ab, aber nur, solange dieser Sender läuft; die Anfrage enthält keine
-Daten über dich, der Server sieht deine IP-Adresse. Mit `[radio] extra_sources=0` oder `enabled=0` schaltest du das ab.
+Spotify-Daten. Mit `cover_lookup=0` sind alle Online-Anfragen aus; deine eigenen Bilder in `logos\custom` verlassen nie deinen PC.
+Logos werden in `Dokumente\Euro Truck Simulator 2\EtsNowPlaying\logos` zwischengespeichert, und `diag.log` bleibt auf deinem PC,
+solange du sie nicht selbst verschickst. Ist ein Eintrag der optionalen Datei `EtsNowPlaying.sources.ini` aktiv (einer für Real
+Hardstyle Radio ist enthalten), fragt das Plugin zusätzlich die dort eingetragene Web-Adresse alle paar Sekunden ab, aber nur,
+solange dieser Sender läuft; die Anfrage enthält keine Daten über dich, der Server sieht deine IP-Adresse. Mit
+`[radio] extra_sources=0` oder `enabled=0` schaltest du das ab.
 
 **Bedingungen.** Freie Software unter der [MIT-Lizenz](LICENSE), „wie besehen“ und ohne Gewähr. Das Plugin verändert Spielcode im
 Speicher: Nutzung auf eigenes Risiko, und die Regeln der Server, auf denen du spielst (z. B. TruckersMP), gelten weiter. Cover und
 Logos gehören ihren Rechteinhabern und werden nur angezeigt, nicht darüber hinaus gespeichert (außer dem Logo-Cache); für deren Daten
-gelten die Bedingungen von iTunes, Deezer und radio-browser.info. Keine Verbindung zu SCS Software, TruckersMP, Spotify, Apple oder Deezer.
+gelten die Bedingungen von iTunes, Deezer und radio-browser.info. Keine Verbindung zu SCS Software, TruckersMP, Spotify, Apple,
+Deezer, Tidal oder Amazon.
 
 [MIT-Lizenz](LICENSE)
